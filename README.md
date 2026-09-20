@@ -46,7 +46,7 @@ Running the switch builds:
 On a brand new Mac, from a bare clone of this repo:
 
 ```sh
-git clone https://github.com/kunchenguid/dotfiles.git
+git clone https://github.com/cloud-practitioner/dotfiles.git
 cd dotfiles
 ```
 
@@ -110,6 +110,8 @@ What you get on Linux:
 - Nix user packages: ripgrep, fd, fzf, jq, lazygit, Neovim, Hack Nerd Font.
 - The macOS casks/brews as their nixpkgs equivalents: WezTerm, Claude Code, and herdr.
 - The same symlinked shell (zsh + starship), Neovim, WezTerm, and agent configs as macOS.
+- SSH client config (per-host aliases) and an `ssh-agent` systemd user service, on the workstation profile - see [SSH](#ssh-workstation-profile).
+- A `container` profile that reuses the same shell and tools inside a devcontainer - see [Devcontainers](#devcontainers).
 
 Notes:
 
@@ -117,6 +119,45 @@ Notes:
 - **Login shell**: home-manager can't change your login shell. To use zsh, run once `chsh -s "$(command -v zsh)"`, then open a new terminal. `bootstrap.sh` prints this reminder.
 - **herdr** comes from `nixpkgs-unstable` (it isn't in the pinned nixpkgs yet); macOS installs it through Homebrew instead.
 - Applying is per-user, so there's no `sudo` on Linux.
+- **WSL2 + systemd**: the `ssh-agent` service is a systemd *user* service, so WSL2 needs systemd enabled. Add `[boot]` / `systemd=true` to `/etc/wsl.conf`, then `wsl --shutdown` and reopen; otherwise the agent never starts and `SSH_AUTH_SOCK` stays empty.
+
+### SSH (workstation profile)
+
+`programs.ssh` writes `~/.ssh/config` with per-host identity aliases, and a systemd
+user service runs `ssh-agent` so `SSH_AUTH_SOCK` is set on every login. Each alias
+maps a host to a specific key:
+
+```
+git@github.com-personal   ->  ~/.ssh/id_ed25519_gh_personal
+git@github.com-work       ->  ~/.ssh/id_ed25519_gh_work
+git@bitbucket.org-work    ->  ~/.ssh/id_ed25519_bb_work
+```
+
+The **private keys are not managed by Nix** - copy them into `~/.ssh` yourself
+(mode 600). `AddKeysToAgent yes` loads a key into the agent the first time it's
+used. Edit `programs.ssh.matchBlocks` in `home.nix` to match your own hosts/keys.
+
+### Devcontainers
+
+`home.nix` takes a `profile` argument. The `container` profile reuses everything
+(zsh, starship, packages, tools) but drops the host SSH machinery - no agent, no
+aliased keys - because a container has no systemd and no private keys. Git auth
+inside the container comes from VS Code forwarding the host's SSH agent, using
+plain `git@github.com:owner/repo.git` URLs.
+
+`flake.nix` exposes both profiles as home-manager configs:
+
+```
+dev@x86_64-linux             # WSL2 / Linux workstation (full profile)
+dev@container-x86_64-linux   # container as user "dev"
+node@container-x86_64-linux  # container as user "node"
+```
+
+Container usernames come from the `containerUsers` list in `flake.nix` (a
+devcontainer base image's non-root user, e.g. `node`), so nothing rewrites `user`
+at runtime. `rebuild.sh` auto-detects a container (`/.dockerenv`,
+`$REMOTE_CONTAINERS`, `$CODESPACES`) and selects the matching `…@container-…`
+config; on a plain WSL2 host it uses the workstation config.
 
 ## Make it yours
 
@@ -128,6 +169,8 @@ If you clone it, review these before you run `bootstrap.sh`:
 - **Host label** `"mac"`, in three places: `flake.nix` (the `darwinConfigurations."mac"` name), `rebuild.sh:5` (the `#mac` at the end of the flake reference), and `bootstrap.sh`'s first-switch command (also `#mac`).
   All three have to match.
 - **CPU architecture**, `hostPlatform` in `configuration.nix` (see Prerequisites above).
+- **Container users** (Linux): if a devcontainer's non-root user differs from your workstation username, add it to the `containerUsers` list in `flake.nix` so a `…@container-…` config exists for it.
+- **SSH keys** (Linux/WSL2): the workstation profile references keys by path in `home.nix`'s `programs.ssh.matchBlocks`. Point them at your own hosts/keys and copy the private keys into `~/.ssh` yourself - Nix doesn't manage secrets.
 
 **Git identity:** this config deliberately does not set your git name or email.
 Git will stop your first commit and tell you to set them (`git config --global user.name "Your Name"` and `git config --global user.email you@example.com`).
@@ -162,11 +205,11 @@ If you don't use it, just remove it from `brews` in your copy.
 ## Repo tour
 
 - `flake.nix` - the entry point.
-  Wires up nixpkgs, nix-darwin, home-manager, and nix-homebrew, and declares the `mac` machine.
+  Wires up nixpkgs, nix-darwin, home-manager, and nix-homebrew, declares the `mac` machine, and generates the Linux home-manager configs (workstation + `container` profiles for each user in `containerUsers`).
 - `configuration.nix` - system-level config: macOS defaults, Homebrew.
-- `home.nix` - user-level config: shell, packages, prompt, and the symlinks described below.
+- `home.nix` - user-level config: shell, packages, prompt, SSH (workstation profile), and the symlinks described below. Takes a `profile` argument (`workstation` or `container`).
 - `rebuild.sh` - re-applies the config after the first switch.
-  Run this every time you make a change.
+  Auto-detects a devcontainer and picks the container profile; otherwise uses the workstation profile. Run this every time you make a change.
 - `home/` - the actual config files that get symlinked into place; the sections below explain the shared symlink model and Pi's narrower selective setup.
 
 ## How the symlinks work
