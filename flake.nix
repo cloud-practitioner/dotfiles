@@ -20,16 +20,27 @@
 
   outputs = inputs@{ self, nix-darwin, nix-homebrew, home-manager, nixpkgs, nixpkgs-unstable }:
     let
-      # The one username line to change if this isn't your machine.
-      # bootstrap.sh offers to rewrite this for you if your macOS username differs.
+      lib = nixpkgs.lib;
+
+      # Primary identity for a personal macOS/WSL2 workstation.
+      # bootstrap.sh offers to rewrite this if your workstation username differs.
       user = "dev";
+
+      # Non-root users that only need the container profile - e.g. the
+      # devcontainer base image's runtime user (CONTAINER_USER in the Dockerfile).
+      # Listing them here lets a container select "<user>@container-<system>" by
+      # its own `id -un`, so nothing has to sed-rewrite `user` above at runtime.
+      containerUsers = [ "node" ];
+
+      linuxSystems = [ "x86_64-linux" "aarch64-linux" ];
 
       # Standalone home-manager for Linux. nix-darwin is macOS-only, so on Linux
       # we apply just the user-level config (home.nix) instead. allowUnfree is
       # set here because it lives in configuration.nix, which Linux never loads.
       # The overlay backports herdr from unstable, since the pinned nixpkgs
-      # doesn't carry it yet.
-      mkLinuxHome = system:
+      # doesn't carry it yet. `profile` selects between a full workstation and a
+      # devcontainer that reuses the same shell/tools but no host SSH machinery.
+      mkLinuxHome = { system, user, profile ? "workstation" }:
         let
           unstable = import nixpkgs-unstable { inherit system; config.allowUnfree = true; };
         in
@@ -39,9 +50,23 @@
             config.allowUnfree = true;
             overlays = [ (_final: _prev: { inherit (unstable) herdr; }) ];
           };
-          extraSpecialArgs = { inherit user; };
+          extraSpecialArgs = { inherit user profile; };
           modules = [ ./home.nix ];
         };
+
+      # Workstation configs for the primary user, plus container configs for the
+      # primary user and every container user. Keyed "<user>@<system>" and
+      # "<user>@container-<system>" so rebuild.sh / post-create.sh can pick one
+      # from `id -un` + `uname -m`.
+      workstationConfigs = lib.listToAttrs (map (system: {
+        name = "${user}@${system}";
+        value = mkLinuxHome { inherit system user; };
+      }) linuxSystems);
+      containerConfigs = lib.listToAttrs (lib.concatMap (u:
+        map (system: {
+          name = "${u}@container-${system}";
+          value = mkLinuxHome { inherit system; user = u; profile = "container"; };
+        }) linuxSystems) (lib.unique ([ user ] ++ containerUsers)));
     in
     {
       darwinConfigurations."mac" = nix-darwin.lib.darwinSystem {
@@ -53,17 +78,16 @@
           {
             home-manager.useGlobalPkgs = true;
             home-manager.useUserPackages = true;
-            home-manager.extraSpecialArgs = { inherit user; };
+            # macOS is always a workstation; the module system doesn't honor the
+            # `profile ? ...` default in home.nix, so pass it explicitly here.
+            home-manager.extraSpecialArgs = { inherit user; profile = "workstation"; };
             home-manager.users.${user} = import ./home.nix;
           }
         ];
       };
 
-      # Keyed by "<user>@<system>" so bootstrap.sh / rebuild.sh can select the
-      # right one from `uname -m`, e.g. home-manager switch --flake .#dev@x86_64-linux
-      homeConfigurations = {
-        "${user}@x86_64-linux" = mkLinuxHome "x86_64-linux";
-        "${user}@aarch64-linux" = mkLinuxHome "aarch64-linux";
-      };
+      # Workstation + container configs, keyed "<user>@[container-]<system>".
+      # bootstrap.sh / rebuild.sh / post-create.sh select one by `id -un` + arch.
+      homeConfigurations = workstationConfigs // containerConfigs;
     };
 }

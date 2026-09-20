@@ -1,7 +1,11 @@
-{ config, pkgs, lib, user, ... }:
+{ config, pkgs, lib, user, profile ? "workstation", ... }:
 
 let
   dotfiles = "${config.home.homeDirectory}/.dotfiles";
+  # The "container" profile drops host-only SSH machinery (agent + aliased
+  # identities) so the same shell/tools can be reused inside a devcontainer
+  # that borrows the WSL2 host's forwarded agent instead.
+  isWorkstation = profile == "workstation";
 in
 
 {
@@ -50,6 +54,41 @@ in
       co = "codex --full-auto";
     };
   };
+
+  # SSH client config lives in the repo so a throwaway WSL2 instance comes up
+  # with the same host aliases every time. The private keys themselves are not
+  # managed by Nix - drop them into ~/.ssh out of band. Workstation-only: a
+  # devcontainer has no keys and no systemd, and borrows the host's forwarded
+  # agent with plain github.com URLs instead.
+  programs.ssh = lib.mkIf isWorkstation {
+    enable = true;
+    matchBlocks = {
+      "*".addKeysToAgent = "yes";
+      "github.com-personal" = {
+        hostname = "github.com";
+        user = "git";
+        identityFile = "~/.ssh/id_ed25519_gh_personal";
+        identitiesOnly = true;
+      };
+      "github.com-work" = {
+        hostname = "github.com";
+        user = "git";
+        identityFile = "~/.ssh/id_ed25519_gh_work";
+        identitiesOnly = true;
+      };
+      "bitbucket.org-work" = {
+        hostname = "bitbucket.org";
+        user = "git";
+        identityFile = "~/.ssh/id_ed25519_bb_work";
+        identitiesOnly = true;
+      };
+    };
+  };
+
+  # WSL2 runs systemd, so let it own ssh-agent: SSH_AUTH_SOCK is always set and
+  # the socket can be forwarded into devcontainers. macOS has its own agent, and
+  # a container has no systemd, so restrict this to a Linux workstation.
+  services.ssh-agent.enable = pkgs.stdenv.isLinux && isWorkstation;
 
   programs.starship = {
     enable = true;

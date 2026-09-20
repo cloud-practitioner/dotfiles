@@ -11,7 +11,14 @@ case "$(uname -m)" in
   aarch64 | arm64) HM_SYSTEM="aarch64-linux" ;;
   *) echo "Unsupported CPU: $(uname -m)" >&2; exit 1 ;;
 esac
-TARGET=~/.dotfiles#"$(whoami)@${HM_SYSTEM}"
+# Inside a devcontainer, apply the container profile: same shell/tools but no
+# host SSH agent/keys (git auth comes from the WSL2 host via VS Code's forwarded
+# agent, using plain github.com URLs).
+PROFILE_PREFIX=""
+if [ -f /.dockerenv ] || [ -n "${REMOTE_CONTAINERS:-}" ] || [ -n "${CODESPACES:-}" ]; then
+  PROFILE_PREFIX="container-"
+fi
+TARGET=~/.dotfiles#"$(whoami)@${PROFILE_PREFIX}${HM_SYSTEM}"
 # The home-manager CLI lands in ~/.nix-profile/bin after the first switch, but
 # that isn't on PATH in a shell started before it existed. Fall back to running
 # it straight from the flake so rebuild.sh works in any shell.
