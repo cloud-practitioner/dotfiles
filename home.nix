@@ -1,4 +1,4 @@
-{ config, pkgs, user, ... }:
+{ config, pkgs, lib, user, ... }:
 
 let
   dotfiles = "${config.home.homeDirectory}/.dotfiles";
@@ -6,7 +6,8 @@ in
 
 {
   home.username = user;
-  home.homeDirectory = "/Users/${user}";
+  home.homeDirectory =
+    if pkgs.stdenv.isDarwin then "/Users/${user}" else "/home/${user}";
   home.stateVersion = "24.11";
   home.packages = with pkgs; [
     # cli i use constantly
@@ -18,9 +19,19 @@ in
     neovim
     # the font everything renders in
     nerd-fonts.hack
+  ] ++ lib.optionals stdenv.isLinux [
+    # Linux equivalents of the macOS Homebrew casks/brews in configuration.nix.
+    wezterm
+    claude-code
+    # Not in the pinned nixpkgs; the flake overlays it in from unstable.
+    herdr
   ];
   fonts.fontconfig.enable = true;
   home.sessionVariables.EDITOR = "nvim";
+
+  # On macOS the nix-darwin module drives home-manager, but standalone Linux
+  # needs its own `home-manager` CLI (used by rebuild.sh).
+  programs.home-manager.enable = pkgs.stdenv.isLinux;
 
   programs.zsh = {
     enable = true;

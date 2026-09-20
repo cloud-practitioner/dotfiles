@@ -6,7 +6,10 @@ config.color_scheme = "rose-pine-moon"
 config.font = wezterm.font("Hack Nerd Font")
 config.font_size = 15.0
 config.window_background_opacity = 0.8
-config.macos_window_background_blur = 50
+-- macOS-only option; setting it on Linux/Windows emits a config warning.
+if wezterm.target_triple:find("darwin") then
+	config.macos_window_background_blur = 50
+end
 config.hide_tab_bar_if_only_one_tab = true
 config.window_decorations = "RESIZE"
 

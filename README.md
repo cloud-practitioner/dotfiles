@@ -13,6 +13,8 @@ Watch the walkthrough: https://youtu.be/5N-okeDdIuI
 My personal Mac setup, managed with nix-darwin and home-manager.
 One repo, one command, and a fresh Mac ends up configured the same way every time.
 
+It's primarily a macOS (nix-darwin) config, but it also runs on Linux via standalone home-manager - see [Linux](#linux).
+
 ## Contributing / Using This Repo
 
 These are my personal dotfiles, shared publicly so people can read them, learn from them, and fork them freely.
@@ -37,6 +39,7 @@ Running the switch builds:
 - Apple Silicon Mac, by default.
 - Intel Mac: change one line.
   In `configuration.nix`, set `nixpkgs.hostPlatform = "x86_64-darwin";` (the comment right there tells you the same thing).
+- Linux (x86_64 or aarch64), any distro with Nix installed: see [Linux](#linux).
 
 ## Fresh-machine setup
 
@@ -60,9 +63,10 @@ Change the host label or CPU architecture if needed, and read the Homebrew clean
 1. Installs Determinate Nix, if it isn't already installed.
 2. Symlinks this repo to `~/.dotfiles`.
    This has to happen before the first build, because `home.nix` points at config files through `~/.dotfiles`.
-3. Checks the `user` configured in `flake.nix` against your actual macOS username, and offers to fix it for you if they differ.
-4. Runs the first `darwin-rebuild switch`.
-   It fetches the `darwin-rebuild` tool from the nix-darwin 26.05 release branch, then applies this repo's locked flake config.
+3. Checks the `user` configured in `flake.nix` against your actual username, and offers to fix it for you if they differ.
+4. Runs the first switch.
+   On macOS it fetches the `darwin-rebuild` tool from the nix-darwin 26.05 release branch, then applies this repo's locked flake config.
+   On Linux it runs the first `home-manager switch` instead (see [Linux](#linux)).
 
 After that, `darwin-rebuild` exists and you're on the normal workflow below.
 
@@ -87,6 +91,32 @@ Edit the config files in place, then apply:
 
 That's it.
 No separate build-and-copy step.
+
+## Linux
+
+nix-darwin is macOS-only, so on Linux this repo applies just the user-level
+config (`home.nix`) with standalone home-manager. The system-level pieces in
+`configuration.nix` (macOS defaults, Homebrew) don't apply.
+
+The same two scripts work - they detect the OS with `uname` and branch automatically:
+
+```sh
+./bootstrap.sh   # installs Determinate Nix, then runs the first home-manager switch
+./rebuild.sh     # re-applies after changes
+```
+
+What you get on Linux:
+
+- Nix user packages: ripgrep, fd, fzf, jq, lazygit, Neovim, Hack Nerd Font.
+- The macOS casks/brews as their nixpkgs equivalents: WezTerm, Claude Code, and herdr.
+- The same symlinked shell (zsh + starship), Neovim, WezTerm, and agent configs as macOS.
+
+Notes:
+
+- **Distro-agnostic**: works on any Linux distro (and WSL) once Nix is installed. home-manager is user-level and never touches apt/dnf/pacman.
+- **Login shell**: home-manager can't change your login shell. To use zsh, run once `chsh -s "$(command -v zsh)"`, then open a new terminal. `bootstrap.sh` prints this reminder.
+- **herdr** comes from `nixpkgs-unstable` (it isn't in the pinned nixpkgs yet); macOS installs it through Homebrew instead.
+- Applying is per-user, so there's no `sudo` on Linux.
 
 ## Make it yours
 
