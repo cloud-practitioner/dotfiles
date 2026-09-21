@@ -29,6 +29,10 @@ in
     claude-code
     # Not in the pinned nixpkgs; the flake overlays it in from unstable.
     herdr
+  ] ++ lib.optionals (stdenv.isLinux && isWorkstation) [
+    # Build/run devcontainers from the CLI; needs a Docker host, so workstation
+    # only - pointless inside a container.
+    devcontainer
   ];
   fonts.fontconfig.enable = true;
   home.sessionVariables.EDITOR = "nvim";
