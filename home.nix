@@ -34,7 +34,8 @@ in
     claude-code
     # Build/run devcontainers from the CLI; needs a Docker host.
     devcontainer
-    # Pi coding agent (@earendil-works/pi-coding-agent) from the pinned nixpkgs.
+    # Pi coding agent (@earendil-works/pi-coding-agent), overlaid from unstable
+    # (flake.nix) for a fresher version than the pinned nixpkgs ships.
     pi-coding-agent
   ];
   fonts.fontconfig.enable = true;

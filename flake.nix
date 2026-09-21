@@ -37,9 +37,10 @@
       # Standalone home-manager for Linux. nix-darwin is macOS-only, so on Linux
       # we apply just the user-level config (home.nix) instead. allowUnfree is
       # set here because it lives in configuration.nix, which Linux never loads.
-      # The overlay backports herdr from unstable, since the pinned nixpkgs
-      # doesn't carry it yet. `profile` selects between a full workstation and a
-      # devcontainer that reuses the same shell/tools but no host SSH machinery.
+      # The overlay pulls herdr (missing from pinned nixpkgs) and a fresher
+      # pi-coding-agent from unstable. `profile` selects between a full
+      # workstation and a devcontainer that reuses the same shell/tools but no
+      # host SSH machinery.
       mkLinuxHome = { system, user, profile ? "workstation" }:
         let
           unstable = import nixpkgs-unstable { inherit system; config.allowUnfree = true; };
@@ -48,7 +49,7 @@
           pkgs = import nixpkgs {
             inherit system;
             config.allowUnfree = true;
-            overlays = [ (_final: _prev: { inherit (unstable) herdr; }) ];
+            overlays = [ (_final: _prev: { inherit (unstable) herdr pi-coding-agent; }) ];
           };
           extraSpecialArgs = { inherit user profile; };
           modules = [ ./home.nix ];
