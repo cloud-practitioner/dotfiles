@@ -43,6 +43,28 @@ in
     syntaxHighlighting.enable = true;  # commands turn green when valid
     initContent = ''
       bindkey '^f' autosuggest-accept
+    '' + lib.optionalString (!isWorkstation) ''
+
+      # Devcontainer only. Single-user Nix (baked into the image) usable here.
+      [ -e "$HOME/.nix-profile/etc/profile.d/nix.sh" ] && . "$HOME/.nix-profile/etc/profile.d/nix.sh"
+
+      # On-demand dotfiles refresh; deliberately never auto-runs on shell start.
+      hm-update() {
+        local sys
+        case "$(uname -m)" in
+          x86_64) sys=x86_64-linux ;;
+          aarch64|arm64) sys=aarch64-linux ;;
+          *) echo "unsupported $(uname -m)" >&2; return 1 ;;
+        esac
+        git -C "$HOME/.dotfiles" pull --ff-only || return 1
+        nix run github:nix-community/home-manager/release-26.05 -- switch -b backup --flake "$HOME/.dotfiles#$(id -un)@container-$sys"
+      }
+
+      # Cheap, non-blocking welcome note (once per terminal); no network calls.
+      if [[ -o interactive && -z "''${HM_WELCOME_SHOWN:-}" && -d "$HOME/.dotfiles/.git" ]]; then
+        export HM_WELCOME_SHOWN=1
+        print -P "%F{blue}dotfiles%f $(git -C "$HOME/.dotfiles" rev-parse --short HEAD 2>/dev/null) - run %F{green}hm-update%f to pull latest and re-switch"
+      fi
     '';
     shellAliases = {
       ".." = "cd ..";
