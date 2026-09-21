@@ -49,8 +49,15 @@ in
       bindkey '^f' autosuggest-accept
     '' + lib.optionalString (!isWorkstation) ''
 
-      # Devcontainer only. Single-user Nix (baked into the image) usable here.
-      [ -e "$HOME/.nix-profile/etc/profile.d/nix.sh" ] && . "$HOME/.nix-profile/etc/profile.d/nix.sh"
+      # Devcontainer only. Make single-user Nix usable, including after a
+      # recreate where $HOME resets but the /nix volume (and its store nix
+      # binary) persists.
+      if [ -e "$HOME/.nix-profile/etc/profile.d/nix.sh" ]; then
+        . "$HOME/.nix-profile/etc/profile.d/nix.sh"
+      elif ! command -v nix >/dev/null 2>&1; then
+        for d in /nix/store/*-nix-2.*/bin(N); do [ -x "$d/nix" ] && export PATH="$d:$PATH" && break; done
+        export NIX_SSL_CERT_FILE="''${NIX_SSL_CERT_FILE:-/etc/ssl/certs/ca-certificates.crt}"
+      fi
 
       # On-demand dotfiles refresh; deliberately never auto-runs on shell start.
       hm-update() {
