@@ -26,13 +26,16 @@ in
   ] ++ lib.optionals stdenv.isLinux [
     # Linux equivalents of the macOS Homebrew casks/brews in configuration.nix.
     wezterm
-    claude-code
     # Not in the pinned nixpkgs; the flake overlays it in from unstable.
     herdr
   ] ++ lib.optionals (stdenv.isLinux && isWorkstation) [
-    # Build/run devcontainers from the CLI; needs a Docker host, so workstation
-    # only - pointless inside a container.
+    # Workstation only. The devcontainer installs Claude Code via the official
+    # installer (Dockerfile), so its Nix profile omits this nixpkgs build.
+    claude-code
+    # Build/run devcontainers from the CLI; needs a Docker host.
     devcontainer
+    # Pi coding agent (@earendil-works/pi-coding-agent) from the pinned nixpkgs.
+    pi-coding-agent
   ];
   fonts.fontconfig.enable = true;
   home.sessionVariables.EDITOR = "nvim";
