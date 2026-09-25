@@ -35,16 +35,16 @@ dotfiles_test_cleanup() {
   done
 }
 
-# Create a temp dir that is removed on exit and store its path in the variable
-# named $1: dotfiles_test_tmproot TMP_ROOT my-test
+# Creates a temp dir removed on exit and stores its path in TMP_ROOT. Call it
+# directly, not in $(...): a subshell would fire the cleanup trap on its own
+# exit, deleting the dir before the caller could use it.
 dotfiles_test_tmproot() {
-  local var=$1 prefix=${2:-dotfiles-test} root
-  root=$(mktemp -d "${TMPDIR:-/tmp}/${prefix}.XXXXXX") || return 1
+  local prefix=${1:-dotfiles-test}
+  TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/${prefix}.XXXXXX") || fail "mktemp failed"
   if [ "${#DOTFILES_TEST_CLEANUP_DIRS[@]}" -eq 0 ]; then
     trap dotfiles_test_cleanup EXIT
   fi
-  DOTFILES_TEST_CLEANUP_DIRS+=("$root")
-  printf -v "$var" '%s' "$root"
+  DOTFILES_TEST_CLEANUP_DIRS+=("$TMP_ROOT")
 }
 
 # --- assertions ---------------------------------------------------------------
