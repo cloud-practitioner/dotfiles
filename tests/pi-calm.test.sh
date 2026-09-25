@@ -17,7 +17,8 @@
 #   degradation with one clear diagnostic;
 # - working ship: geometry, cadence, colors, resize, narrow fallback,
 #   freeze/resume, timer disposal, extension lifecycle;
-# - real Pi 0.82 TUI proofs in tmux without credentials or provider calls.
+# - real Pi TUI proofs in tmux, against the Pi version pinned in
+#   tools/sources.json, without credentials or provider calls.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -25,7 +26,10 @@ set -u
 
 dotfiles_test_tmproot pi-calm
 CALM_DIR="$ROOT/home/.pi/agent/extensions/calm"
-PI_PACKAGE_DIR=${PI_CALM_TEST_PACKAGE_DIR:-"$(npm root -g 2>/dev/null)/@earendil-works/pi-coding-agent"}
+# The package behind the `pi` on PATH, in npm's global prefix layout
+# (<prefix>/bin/pi beside <prefix>/lib/node_modules), which the Nix build mirrors.
+PI_BIN=$(command -v pi 2>/dev/null || true)
+PI_PACKAGE_DIR=${PI_CALM_TEST_PACKAGE_DIR:-"${PI_BIN%/bin/pi}/lib/node_modules/@earendil-works/pi-coding-agent"}
 TMUX_SOCKET="pi-calm-test-$$"
 TMUX_SESSION="pi-calm-e2e"
 
@@ -76,6 +80,23 @@ find_chrome() {
   return 1
 }
 
+# Link Pi's own copy of dependency $1 into fixture $2, found the way Node
+# resolves it from Pi's real package directory: nested under it (npm install
+# -g) or hoisted beside it (the pi.dev installer and the Nix build).
+link_pi_dependency() {
+  local dep=$1 fixture=$2 dir
+  dir=$(cd "$PI_PACKAGE_DIR" && pwd -P)
+  while [ "$dir" != / ]; do
+    if [ -d "$dir/node_modules/$dep" ]; then
+      mkdir -p "$(dirname "$fixture/node_modules/$dep")"
+      ln -s "$dir/node_modules/$dep" "$fixture/node_modules/$dep"
+      return 0
+    fi
+    dir=$(dirname "$dir")
+  done
+  fail "Pi package at $PI_PACKAGE_DIR does not resolve $dep"
+}
+
 # Copy the shipped extension into a fixture layout with resolvable node_modules.
 # Echoes the fixture root. Requires $1 = fixture directory.
 build_node_fixture() {
@@ -83,8 +104,8 @@ build_node_fixture() {
   mkdir -p "$fixture/calm" "$fixture/node_modules/@earendil-works"
   cp -R "$CALM_DIR/index.ts" "$CALM_DIR/lib" "$fixture/calm/"
   ln -s "$PI_PACKAGE_DIR" "$fixture/node_modules/@earendil-works/pi-coding-agent"
-  ln -s "$PI_PACKAGE_DIR/node_modules/@earendil-works/pi-tui" "$fixture/node_modules/@earendil-works/pi-tui"
-  ln -s "$PI_PACKAGE_DIR/node_modules/typebox" "$fixture/node_modules/typebox"
+  link_pi_dependency @earendil-works/pi-tui "$fixture"
+  link_pi_dependency typebox "$fixture"
   printf '%s\n' '{"type":"module"}' >"$fixture/package.json"
 }
 
@@ -160,8 +181,7 @@ test_static_typescript_and_repo_wiring() {
   else
     local fixture="$TMP_ROOT/typecheck"
     build_node_fixture "$fixture"
-    mkdir -p "$fixture/node_modules/@types"
-    ln -s "$PI_PACKAGE_DIR/node_modules/@types/node" "$fixture/node_modules/@types/node"
+    link_pi_dependency @types/node "$fixture"
     cat >"$fixture/tsconfig.json" <<'JSON'
 {
   "compilerOptions": {
@@ -583,13 +603,14 @@ JS
 }
 
 test_real_pi_tui_smoke() {
-  local fixture agent project socket pane i
+  local fixture agent project socket pane i pinned
   if ! command -v pi >/dev/null 2>&1 || ! command -v tmux >/dev/null 2>&1; then
     echo "skip: pi or tmux not found for isolated real TUI smoke"
     return 0
   fi
-  [ "$(pi --version 2>/dev/null || true)" = "0.82.0" ] \
-    || fail "real Pi smoke requires the installed Pi 0.82.0 proof target"
+  pinned=$(jq -r .pi.version "$ROOT/tools/sources.json")
+  [ "$(pi --version 2>/dev/null || true)" = "$pinned" ] \
+    || fail "real Pi smoke requires the installed Pi to be the pinned $pinned (tools/sources.json); rebuild the home profile"
 
   fixture="$TMP_ROOT/tui-smoke"
   agent="$fixture/agent"
@@ -704,7 +725,7 @@ TS
   tmux -L "$socket" send-keys -t "$TMUX_SESSION" Enter
   sleep 0.1
   tmux -L "$socket" kill-server 2>/dev/null || true
-  pass "isolated Pi 0.82 TUI proves auto-load, /calm persistence, resize-safe working animation, and genuine transcript text without credentials"
+  pass "isolated pinned Pi TUI proves auto-load, /calm persistence, resize-safe working animation, and genuine transcript text without credentials"
 }
 
 test_zero_coupling_and_state_file
