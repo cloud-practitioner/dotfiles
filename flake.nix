@@ -12,13 +12,9 @@
     home-manager.inputs.nixpkgs.follows = "nixpkgs";
 
     nix-homebrew.url = "github:zhaofengli/nix-homebrew";
-
-    # herdr isn't in the pinned darwin nixpkgs yet, so the Linux build pulls
-    # just that one package from unstable (macOS installs it via Homebrew).
-    nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
   };
 
-  outputs = inputs@{ self, nix-darwin, nix-homebrew, home-manager, nixpkgs, nixpkgs-unstable }:
+  outputs = inputs@{ self, nix-darwin, nix-homebrew, home-manager, nixpkgs }:
     let
       lib = nixpkgs.lib;
 
@@ -35,23 +31,23 @@
 
       linuxSystems = [ "x86_64-linux" "aarch64-linux" ];
 
+      # Linux nixpkgs. allowUnfree is set here because it lives in
+      # configuration.nix, which Linux never loads. The overlay adds
+      # `upstream-tools`: herdr, Claude Code, and Pi built from each vendor's
+      # pinned release download (tools/), identical in every Linux profile.
+      linuxPkgs = system: import nixpkgs {
+        inherit system;
+        config.allowUnfree = true;
+        overlays = [ (final: _prev: { upstream-tools = final.callPackage ./tools { }; }) ];
+      };
+
       # Standalone home-manager for Linux. nix-darwin is macOS-only, so on Linux
-      # we apply just the user-level config (home.nix) instead. allowUnfree is
-      # set here because it lives in configuration.nix, which Linux never loads.
-      # The overlay pulls herdr (missing from pinned nixpkgs) and a fresher
-      # pi-coding-agent from unstable. `profile` selects between a full
-      # workstation and a devcontainer that reuses the same shell/tools but no
-      # host SSH machinery.
+      # we apply just the user-level config (home.nix) instead. `profile`
+      # selects between a full workstation and a devcontainer that reuses the
+      # same shell/tools but no host SSH machinery.
       mkLinuxHome = { system, user, profile ? "workstation" }:
-        let
-          unstable = import nixpkgs-unstable { inherit system; config.allowUnfree = true; };
-        in
         home-manager.lib.homeManagerConfiguration {
-          pkgs = import nixpkgs {
-            inherit system;
-            config.allowUnfree = true;
-            overlays = [ (_final: _prev: { inherit (unstable) herdr pi-coding-agent; }) ];
-          };
+          pkgs = linuxPkgs system;
           extraSpecialArgs = { inherit user profile; };
           modules = [ ./home.nix ];
         };
@@ -93,5 +89,29 @@
       # bootstrap.sh / rebuild.sh / post-create.sh (in
       # cloud-practitioner/agentic-devcontainer) select one by `id -un` + arch.
       homeConfigurations = workstationConfigs // containerConfigs;
+
+      # The pinned upstream tools, buildable on their own (`nix build .#pi`).
+      packages = lib.genAttrs linuxSystems (system: {
+        inherit ((linuxPkgs system).upstream-tools) claude-code herdr pi;
+      });
+
+      # `nix run .#update-tools [-- --dry-run]` bumps every pin in
+      # tools/sources.json to the vendors' latest releases.
+      apps = lib.genAttrs linuxSystems (system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          update-tools = pkgs.writeShellApplication {
+            name = "update-tools";
+            runtimeInputs = with pkgs; [ coreutils curl gawk jq ];
+            text = builtins.readFile ./tools/update.sh;
+          };
+        in
+        {
+          update-tools = {
+            type = "app";
+            program = lib.getExe update-tools;
+            meta.description = "Bump the herdr, Claude Code, and Pi pins to the latest upstream releases";
+          };
+        });
     };
 }

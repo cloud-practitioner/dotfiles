@@ -1,0 +1,231 @@
+#!/usr/bin/env bash
+# Behavior checks for the pinned upstream CLI tools (tools/): herdr, Claude
+# Code, and Pi from each vendor's release downloads.
+#
+# Coverage:
+# - both Linux home profiles (workstation and container) for this machine's
+#   system install exactly the pinned builds from tools/sources.json;
+# - the built profiles' tools report the pinned versions, and their
+#   self-updaters are off (`claude update` refuses and writes nothing);
+# - `update-tools` rewrites every version, URL, and hash from vendor-shaped
+#   manifests, leaves the pins alone in --dry-run, and rejects bad manifests;
+# - the `nix run .#update-tools` flake app builds (shellcheck included).
+#
+# Nix evaluates the flake from Git, so new files must be tracked (`git add`).
+set -u
+
+# shellcheck source=tests/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+dotfiles_test_tmproot upstream-tools
+SOURCES="$ROOT/tools/sources.json"
+TOOLS=(claude-code herdr pi)
+
+case "$(uname -m)" in
+  x86_64) SYSTEM=x86_64-linux ;;
+  aarch64|arm64) SYSTEM=aarch64-linux ;;
+  *) SYSTEM= ;;
+esac
+
+pin() {
+  jq -r --arg t "$1" --arg f "$2" '.[$t][$f]' "$3"
+}
+
+pin_platform() {
+  jq -r --arg t "$1" --arg s "$2" --arg f "$3" '.[$t].platforms[$s][$f]' "$4"
+}
+
+# Echo the two Linux home configs for $SYSTEM: the workstation one and a container one.
+profiles() {
+  nix eval --json "$ROOT#homeConfigurations" --apply builtins.attrNames 2>/dev/null \
+    | jq -r --arg s "$SYSTEM" '
+        (map(select(endswith("@" + $s))) | first),
+        (map(select(endswith("@container-" + $s))) | first)'
+}
+
+have_linux_nix() {
+  if [ "$(uname -s)" != Linux ] || [ -z "$SYSTEM" ] || ! command -v nix >/dev/null 2>&1; then
+    echo "skip: needs Nix on x86_64/aarch64 Linux"
+    return 1
+  fi
+}
+
+test_profiles_install_pinned_builds() {
+  local profile packages tool matches
+  have_linux_nix || return 0
+  for profile in $(profiles); do
+    packages=$(nix eval --json "$ROOT#homeConfigurations.\"$profile\".config.home.packages" \
+      --apply 'map (p: { name = p.pname or p.name; version = p.version or null; url = p.src.url or null; hash = p.src.outputHash or null; })' \
+      2>/dev/null) || fail "$profile: cannot evaluate home.packages"
+    for tool in "${TOOLS[@]}"; do
+      matches=$(jq -c --arg t "$tool" '[.[] | select(.name == $t)]' <<<"$packages")
+      [ "$(jq length <<<"$matches")" = 1 ] \
+        || fail "$profile: expected exactly one $tool package, got $matches"
+      [ "$(jq -r '.[0].version' <<<"$matches")" = "$(pin "$tool" version "$SOURCES")" ] \
+        || fail "$profile: $tool is not at the pinned version: $matches"
+      [ "$(jq -r '.[0].url' <<<"$matches")" = "$(pin_platform "$tool" "$SYSTEM" url "$SOURCES")" ] \
+        || fail "$profile: $tool does not fetch the pinned upstream URL: $matches"
+      [ "$(jq -r '.[0].hash' <<<"$matches")" = "$(pin_platform "$tool" "$SYSTEM" sha256 "$SOURCES")" ] \
+        || fail "$profile: $tool does not verify the pinned SHA-256: $matches"
+    done
+    assert_not_contains "$packages" '"pi-coding-agent"' "$profile: still installs nixpkgs pi-coding-agent"
+  done
+  pass "workstation and container profiles install herdr, Claude Code, and Pi from the pinned upstream downloads"
+}
+
+test_built_profiles_run_pinned_versions() {
+  local profile out home update_home update
+  have_linux_nix || return 0
+  for profile in $(profiles); do
+    out=$(nix build --no-link --print-out-paths "$ROOT#homeConfigurations.\"$profile\".activationPackage" 2>/dev/null) \
+      || fail "$profile: activation package does not build"
+    home="$TMP_ROOT/home-$profile"
+    mkdir -p "$home"
+    [ "$(HOME=$home "$out/home-path/bin/claude" --version)" = "$(pin claude-code version "$SOURCES") (Claude Code)" ] \
+      || fail "$profile: claude --version is not the pinned version"
+    [ "$(HOME=$home "$out/home-path/bin/herdr" --version)" = "herdr $(pin herdr version "$SOURCES")" ] \
+      || fail "$profile: herdr --version is not the pinned version"
+    [ "$(HOME=$home "$out/home-path/bin/pi" --version)" = "$(pin pi version "$SOURCES")" ] \
+      || fail "$profile: pi --version is not the pinned version"
+    update_home="$home/claude-update"
+    mkdir -p "$update_home"
+    update=$(HOME=$update_home CLAUDE_CONFIG_DIR="$update_home/.claude" "$out/home-path/bin/claude" update </dev/null 2>&1)
+    assert_contains "$update" "Updates are disabled" "$profile: claude update is not refused: $update"
+    [ ! -e "$update_home/.local/bin/claude" ] || fail "$profile: claude update installed an unpinned copy"
+    update=$(HOME=$home "$out/home-path/bin/herdr" update </dev/null 2>&1)
+    assert_contains "$update" "self-update is disabled for Nix installs" "$profile: herdr update is not refused: $update"
+    [ "$(HOME=$home HERDR_CONFIG_PATH="$ROOT/home/.config/herdr/config.toml" "$out/home-path/bin/herdr" config check)" = "config: ok" ] \
+      || fail "$profile: herdr rejects home/.config/herdr/config.toml"
+    grep -aq PI_SKIP_VERSION_CHECK "$(readlink -f "$out/home-path/bin/pi")" \
+      || fail "$profile: pi wrapper does not skip the version check"
+  done
+  grep -Eq '^version_check = false$' "$ROOT/home/.config/herdr/config.toml" \
+    || fail "herdr config does not disable the background version check"
+  pass "built workstation and container profiles run herdr, Claude Code, and Pi at the pinned versions with self-updates off"
+}
+
+# Write vendor-shaped release manifests under $1 for claude $2, herdr $3, pi $4.
+write_fixtures() {
+  local dir=$1 claude=$2 herdr=$3 pi=$4
+  mkdir -p "$dir/claude/$claude" "$dir/pi-api" "$dir/pi-releases/v$pi"
+  printf '%s\n' "$claude" > "$dir/claude/latest"
+  jq -n --arg v "$claude" '{version: $v, platforms: {
+      "linux-x64": {binary: "claude", checksum: ("a" * 64), size: 1},
+      "linux-arm64": {binary: "claude", checksum: ("b" * 64), size: 1},
+      "darwin-arm64": {binary: "claude", checksum: ("c" * 64), size: 1}}}' \
+    > "$dir/claude/$claude/manifest.json"
+  jq -n --arg v "$herdr" '{version: $v,
+      assets: {
+        "linux-x86_64": "https://github.com/herdrdev/herdr/releases/download/v\($v)/herdr-linux-x86_64",
+        "linux-aarch64": "https://github.com/herdrdev/herdr/releases/download/v\($v)/herdr-linux-aarch64"},
+      sha256: {"linux-x86_64": ("D" * 64), "linux-aarch64": ("e" * 64)}}' \
+    > "$dir/herdr-latest.json"
+  jq -n --arg v "$pi" '{schemaVersion: 1, version: $v}' > "$dir/pi-api/latest"
+  printf '%s  %s\n' \
+    "$(printf 'f%.0s' {1..64})" pi-linux-x64.tar.gz \
+    "$(printf '1%.0s' {1..64})" pi-linux-arm64.tar.gz \
+    "$(printf '2%.0s' {1..64})" pi-darwin-arm64.tar.gz \
+    > "$dir/pi-releases/v$pi/SHA256SUMS"
+}
+
+run_update_tools() {
+  local dir=$1 sources=$2
+  shift 2
+  CLAUDE_RELEASES_URL="file://$dir/claude" \
+    HERDR_MANIFEST_URL="file://$dir/herdr-latest.json" \
+    PI_INSTALLER_API_URL="file://$dir/pi-api" \
+    PI_RELEASES_URL="file://$dir/pi-releases" \
+    UPDATE_TOOLS_SOURCES="$sources" \
+    bash "$ROOT/tools/update.sh" "$@" 2>&1
+}
+
+test_update_tools_rewrites_pins() {
+  local dir="$TMP_ROOT/update" sources out
+  if ! command -v curl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+    echo "skip: update-tools needs curl and jq"
+    return 0
+  fi
+  sources="$dir/sources.json"
+  write_fixtures "$dir" 9.8.7 9.9.9 9.10.11
+  mkdir -p "$dir" && cp "$SOURCES" "$sources"
+
+  out=$(run_update_tools "$dir" "$sources" --dry-run) || fail "dry run failed: $out"
+  assert_contains "$out" "claude-code  $(pin claude-code version "$SOURCES") -> 9.8.7" "dry run does not report the Claude Code bump: $out"
+  assert_contains "$out" "pi           $(pin pi version "$SOURCES") -> 9.10.11" "dry run does not report the Pi bump: $out"
+  assert_contains "$out" "Dry run: $sources left unchanged" "dry run does not say it wrote nothing: $out"
+  cmp -s "$SOURCES" "$sources" || fail "dry run modified the pins file"
+
+  out=$(run_update_tools "$dir" "$sources") || fail "update failed: $out"
+  assert_contains "$out" "Updated $sources" "update does not report the rewrite: $out"
+  [ "$(pin claude-code version "$sources")" = 9.8.7 ] || fail "Claude Code version not bumped"
+  [ "$(pin_platform claude-code x86_64-linux url "$sources")" = "file://$dir/claude/9.8.7/linux-x64/claude" ] \
+    || fail "Claude Code URL does not follow install.sh's layout"
+  [ "$(pin_platform claude-code aarch64-linux sha256 "$sources")" = "$(printf 'b%.0s' {1..64})" ] \
+    || fail "Claude Code hash is not the manifest checksum"
+  [ "$(pin claude-code checksums "$sources")" = "file://$dir/claude/9.8.7/manifest.json" ] \
+    || fail "Claude Code pin does not record its checksum source"
+  [ "$(pin herdr version "$sources")" = 9.9.9 ] || fail "herdr version not bumped"
+  [ "$(pin_platform herdr x86_64-linux url "$sources")" = "https://github.com/herdrdev/herdr/releases/download/v9.9.9/herdr-linux-x86_64" ] \
+    || fail "herdr URL is not the manifest asset"
+  [ "$(pin_platform herdr x86_64-linux sha256 "$sources")" = "$(printf 'd%.0s' {1..64})" ] \
+    || fail "herdr hash is not the lower-cased manifest checksum"
+  [ "$(pin pi version "$sources")" = 9.10.11 ] || fail "Pi version not bumped"
+  [ "$(pin_platform pi aarch64-linux url "$sources")" = "file://$dir/pi-releases/v9.10.11/pi-linux-arm64.tar.gz" ] \
+    || fail "Pi URL is not the release asset"
+  [ "$(pin_platform pi x86_64-linux sha256 "$sources")" = "$(printf 'f%.0s' {1..64})" ] \
+    || fail "Pi hash is not the SHA256SUMS entry"
+  [ "$(jq -c '[.[].platforms | keys] | unique' "$sources")" = '[["aarch64-linux","x86_64-linux"]]' ] \
+    || fail "pins cover other systems than the Linux profiles"
+
+  out=$(run_update_tools "$dir" "$sources") || fail "idempotent rerun failed: $out"
+  assert_contains "$out" "All pins are already current." "rerun does not report current pins: $out"
+  pass "update-tools rewrites every version, URL, and hash from the vendor manifests and leaves pins alone in --dry-run"
+}
+
+test_update_tools_rejects_bad_manifests() {
+  local dir="$TMP_ROOT/bad" sources out
+  if ! command -v curl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+    echo "skip: update-tools needs curl and jq"
+    return 0
+  fi
+  sources="$dir/sources.json"
+  write_fixtures "$dir" 9.8.7 9.9.9 9.10.11
+  cp "$SOURCES" "$sources"
+
+  jq '.platforms["linux-arm64"].checksum = "not-a-hash"' "$dir/claude/9.8.7/manifest.json" > "$dir/m" \
+    && mv "$dir/m" "$dir/claude/9.8.7/manifest.json"
+  if out=$(run_update_tools "$dir" "$sources"); then
+    fail "update-tools accepted a malformed checksum: $out"
+  fi
+  assert_contains "$out" "claude-code linux-arm64: missing or malformed SHA-256" "malformed checksum error is unclear: $out"
+  cmp -s "$SOURCES" "$sources" || fail "a rejected update modified the pins file"
+
+  write_fixtures "$dir" 9.8.7 9.9.9 9.10.11
+  sed -i '/pi-linux-x64/d' "$dir/pi-releases/v9.10.11/SHA256SUMS"
+  if out=$(run_update_tools "$dir" "$sources"); then
+    fail "update-tools accepted a release without a Linux x64 checksum: $out"
+  fi
+  assert_contains "$out" "pi pi-linux-x64.tar.gz: missing or malformed SHA-256" "missing asset error is unclear: $out"
+  cmp -s "$SOURCES" "$sources" || fail "a rejected update modified the pins file"
+
+  rm "$dir/pi-api/latest"
+  if out=$(run_update_tools "$dir" "$sources"); then
+    fail "update-tools succeeded without the Pi release metadata: $out"
+  fi
+  assert_contains "$out" "cannot fetch file://$dir/pi-api/latest" "unreachable endpoint error is unclear: $out"
+  pass "update-tools rejects malformed or incomplete manifests without touching the pins"
+}
+
+test_update_tools_flake_app() {
+  local out
+  have_linux_nix || return 0
+  out=$(nix run "$ROOT#update-tools" -- --help 2>/dev/null) || fail "nix run .#update-tools does not build or run"
+  assert_contains "$out" "Usage: nix run .#update-tools [-- --dry-run]" "update-tools app prints unexpected help: $out"
+  pass "nix run .#update-tools builds (shellcheck-clean) and runs"
+}
+
+test_profiles_install_pinned_builds
+test_built_profiles_run_pinned_versions
+test_update_tools_rewrites_pins
+test_update_tools_rejects_bad_manifests
+test_update_tools_flake_app

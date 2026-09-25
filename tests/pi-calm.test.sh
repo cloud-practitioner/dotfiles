@@ -17,7 +17,8 @@
 #   degradation with one clear diagnostic;
 # - working ship: geometry, cadence, colors, resize, narrow fallback,
 #   freeze/resume, timer disposal, extension lifecycle;
-# - real Pi 0.82 TUI proofs in tmux without credentials or provider calls.
+# - real Pi TUI proofs in tmux, against the Pi version pinned in
+#   tools/sources.json, without credentials or provider calls.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -583,13 +584,14 @@ JS
 }
 
 test_real_pi_tui_smoke() {
-  local fixture agent project socket pane i
+  local fixture agent project socket pane i pinned
   if ! command -v pi >/dev/null 2>&1 || ! command -v tmux >/dev/null 2>&1; then
     echo "skip: pi or tmux not found for isolated real TUI smoke"
     return 0
   fi
-  [ "$(pi --version 2>/dev/null || true)" = "0.82.0" ] \
-    || fail "real Pi smoke requires the installed Pi 0.82.0 proof target"
+  pinned=$(jq -r .pi.version "$ROOT/tools/sources.json")
+  [ "$(pi --version 2>/dev/null || true)" = "$pinned" ] \
+    || fail "real Pi smoke requires the installed Pi to be the pinned $pinned (tools/sources.json); rebuild the home profile"
 
   fixture="$TMP_ROOT/tui-smoke"
   agent="$fixture/agent"
@@ -704,7 +706,7 @@ TS
   tmux -L "$socket" send-keys -t "$TMUX_SESSION" Enter
   sleep 0.1
   tmux -L "$socket" kill-server 2>/dev/null || true
-  pass "isolated Pi 0.82 TUI proves auto-load, /calm persistence, resize-safe working animation, and genuine transcript text without credentials"
+  pass "isolated pinned Pi TUI proves auto-load, /calm persistence, resize-safe working animation, and genuine transcript text without credentials"
 }
 
 test_zero_coupling_and_state_file

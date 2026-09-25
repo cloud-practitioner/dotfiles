@@ -33,18 +33,14 @@ in
   ] ++ lib.optionals stdenv.isLinux [
     # Linux equivalents of the macOS Homebrew casks/brews in configuration.nix.
     wezterm
-    # Not in the pinned nixpkgs; the flake overlays it in from unstable.
-    herdr
+    # Vendor release builds pinned in tools/sources.json (flake.nix overlay),
+    # so the workstation and the devcontainer run identical versions.
+    upstream-tools.herdr
+    upstream-tools.claude-code
+    upstream-tools.pi
   ] ++ lib.optionals (stdenv.isLinux && isWorkstation) [
-    # Workstation only. The devcontainer installs Claude Code via the official
-    # installer (Dockerfile in cloud-practitioner/agentic-devcontainer), so its
-    # Nix profile omits this nixpkgs build.
-    claude-code
     # Build/run devcontainers from the CLI; needs a Docker host.
     devcontainer
-    # Pi coding agent (@earendil-works/pi-coding-agent), overlaid from unstable
-    # (flake.nix) for a fresher version than the pinned nixpkgs ships.
-    pi-coding-agent
   ];
   fonts.fontconfig.enable = true;
   home.sessionVariables.EDITOR = "nvim";

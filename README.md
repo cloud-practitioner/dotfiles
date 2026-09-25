@@ -28,6 +28,7 @@ Running the switch builds:
 - System settings (dark mode, key repeat, dock, Finder, trackpad)
 - Homebrew apps (casks and CLI tools)
 - Nix user packages (ripgrep, fd, fzf, jq, lazygit, Neovim, Hack Nerd Font)
+- On Linux, herdr, Claude Code, and Pi pinned to their vendors' own release builds (see [Upstream CLI tools](#upstream-cli-tools))
 - Shell (zsh, aliases, starship prompt)
 - Editor (Neovim config with the rose-pine moon theme)
 - Terminal (WezTerm config with the rose-pine moon theme and dimmed unfocused windows)
@@ -108,7 +109,8 @@ The same two scripts work - they detect the OS with `uname` and branch automatic
 What you get on Linux:
 
 - Nix user packages: ripgrep, fd, fzf, jq, lazygit, Neovim, Hack Nerd Font.
-- The macOS casks/brews as their nixpkgs equivalents: WezTerm, Claude Code, and herdr.
+- WezTerm from nixpkgs, the Linux equivalent of its macOS cask.
+- herdr, Claude Code, and Pi from each vendor's pinned release download, identical on the workstation and in devcontainers - see [Upstream CLI tools](#upstream-cli-tools).
 - The same symlinked shell (zsh + starship), Neovim, WezTerm, and agent configs as macOS.
 - SSH client config (per-host aliases) and an `ssh-agent` systemd user service, on the workstation profile - see [SSH](#ssh-workstation-profile).
 - A `container` profile that reuses the same shell and tools inside a devcontainer - see [Devcontainers](#devcontainers).
@@ -117,9 +119,36 @@ Notes:
 
 - **Distro-agnostic**: works on any Linux distro (and WSL) once Nix is installed. home-manager is user-level and never touches apt/dnf/pacman.
 - **Login shell**: home-manager can't change your login shell. To use zsh, run once `chsh -s "$(command -v zsh)"`, then open a new terminal. `bootstrap.sh` prints this reminder.
-- **herdr** comes from `nixpkgs-unstable` (it isn't in the pinned nixpkgs yet); macOS installs it through Homebrew instead.
+- **herdr and Claude Code** come from Homebrew on macOS (`configuration.nix`); Pi is not installed there.
 - Applying is per-user, so there's no `sudo` on Linux.
 - **WSL2 + systemd**: the `ssh-agent` service is a systemd *user* service, so WSL2 needs systemd enabled. Add `[boot]` / `systemd=true` to `/etc/wsl.conf`, then `wsl --shutdown` and reopen; otherwise the agent never starts and `SSH_AUTH_SOCK` stays empty.
+
+### Upstream CLI tools
+
+herdr, Claude Code, and Pi are not nixpkgs builds. Each is a Nix package (`tools/`) that downloads the same release artifact the vendor's `curl ... | sh` installer would, pinned by version and SHA-256 in `tools/sources.json`:
+
+| Tool | Installer it mirrors | Artifact | Pinned hash comes from |
+| --- | --- | --- | --- |
+| Claude Code | `https://claude.ai/install.sh` | native binary from `downloads.claude.ai/claude-code-releases` | that release's `manifest.json` |
+| herdr | `https://herdr.dev/install.sh` | static binary from the GitHub release | `https://herdr.dev/latest.json` |
+| Pi | `https://pi.dev/install.sh` | standalone build (`pi-linux-*.tar.gz`) from the GitHub release | that release's `SHA256SUMS` |
+
+Both Linux profiles (workstation and container) install the same pins, so the workstation and every devcontainer run identical versions.
+The pin is the only way these tools change: Claude Code's auto-updater and `claude update` are disabled, Pi skips its version check (and `pi update` can't replace a standalone build), and herdr refuses `herdr update` for Nix installs while `home/.config/herdr/config.toml` turns off its background version check.
+
+To move all three to the latest upstream releases:
+
+```sh
+nix run .#update-tools -- --dry-run   # show the new versions and pins, change nothing
+nix run .#update-tools                # rewrite tools/sources.json
+```
+
+Commit and push the result, then apply it the same way in each environment:
+
+- **WSL2 workstation**: `./rebuild.sh` from the repo.
+- **Devcontainer**: `hm-update` (pulls `~/.dotfiles` and re-switches the container profile).
+
+To check without applying, `nix build .#claude-code .#herdr .#pi` builds just the tools, and `bash tests/upstream-tools.test.sh` checks that both profiles install the pinned versions and that the updater behaves.
 
 ### SSH (workstation profile)
 
@@ -216,6 +245,8 @@ If you don't use it, just remove it from `brews` in your copy.
   Wires up nixpkgs, nix-darwin, home-manager, and nix-homebrew, declares the `mac` machine, and generates the Linux home-manager configs (workstation + `container` profiles for each user in `containerUsers`).
 - `configuration.nix` - system-level config: macOS defaults, Homebrew.
 - `home.nix` - user-level config: shell, packages, prompt, SSH (workstation profile), and the symlinks described below. Takes a `profile` argument (`workstation` or `container`).
+- `tools/` - the pinned upstream builds of herdr, Claude Code, and Pi (`sources.json`), plus `update.sh`, the `nix run .#update-tools` pin bumper.
+- `tests/` - behavior tests; run one with `bash tests/<name>.test.sh`.
 - `rebuild.sh` - re-applies the config after the first switch.
   Auto-detects a devcontainer and picks the container profile; otherwise uses the workstation profile. Run this every time you make a change.
 - `home/` - the actual config files that get symlinked into place; the sections below explain the shared symlink model and Pi's narrower selective setup.
@@ -228,7 +259,7 @@ You only run `./rebuild.sh` when you change something that isn't just a symlinke
 
 ## Optional Pi configuration
 
-Pi is an opt-in CLI, not a dependency this repository vendors. Install it from its owner with the [official Pi instructions](https://pi.dev), for example:
+On Linux, both home profiles install Pi from its pinned standalone release (see [Upstream CLI tools](#upstream-cli-tools)). On macOS, Pi is opt-in: install it from its owner with the [official Pi instructions](https://pi.dev), for example:
 
 ```sh
 npm install -g --ignore-scripts @earendil-works/pi-coding-agent
@@ -259,7 +290,7 @@ The versions are immutable pins, so Pi does not move them during package updates
 
 Both packages execute with your full user permissions and must be trusted like any other executable code.
 
-Home Manager deliberately does not manage `~/.pi/agent` itself, or Pi authentication, sessions, trust decisions, caches, npm/git package trees, or any other runtime state. The model overrides contain no credentials or endpoint settings, do not choose a default model, and only take effect after you authenticate Pi yourself. This remains an additive post-video layer: it does not install Pi, a launcher, or package source code into this repository.
+Home Manager deliberately does not manage `~/.pi/agent` itself, or Pi authentication, sessions, trust decisions, caches, npm/git package trees, or any other runtime state. The model overrides contain no credentials or endpoint settings, do not choose a default model, and only take effect after you authenticate Pi yourself. This remains an additive post-video layer: it does not add a launcher or package source code to this repository.
 
 ## Notes
 
