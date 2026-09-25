@@ -106,6 +106,14 @@ The same two scripts work - they detect the OS with `uname` and branch automatic
 ./rebuild.sh     # re-applies after changes; every switch also tops up the pnpm CLIs
 ```
 
+On the WSL2 workstation, pick up changes pushed to this repo (a new herdr pin, for example) by pulling and re-applying:
+
+```sh
+git -C ~/.dotfiles pull --ff-only && ~/.dotfiles/rebuild.sh
+```
+
+There is deliberately no `hm-update` on WSL2; that shortcut exists only inside a devcontainer (see [Devcontainers](#devcontainers)).
+
 What you get on Linux:
 
 - Nix user packages: ripgrep, fd, fzf, jq, lazygit, Neovim, Hack Nerd Font.
@@ -155,16 +163,16 @@ If pnpm or the network is unavailable, the switch prints a warning and still com
 Where pnpm itself comes from depends on the profile:
 
 - **WSL2 workstation**: the same activation first installs nvm with its official install script (`PROFILE=/dev/null`, so it never edits `~/.zshrc`, `~/.bashrc`, or `~/.profile`), then `nvm install --lts` as nvm's default, then `npm install -g pnpm`, the way [Microsoft's Node.js on WSL guide](https://learn.microsoft.com/en-us/windows/dev-environment/javascript/nodejs-on-wsl) does it. The interactive workstation zsh loads nvm (`$NVM_DIR`, default `~/.nvm`), so `node`, `npm`, and `pnpm` are nvm's there. Every switch also links `$NVM_DIR/default` to nvm's default Node.js, and `$NVM_DIR/default/bin` is on every shell's `PATH` (see below), so scripts and `wsl.exe -e zsh -c ...` find them without loading nvm; after `nvm alias default ...`, switch again to move that link. As that guide advises, don't install another Node.js alongside it.
-- **Devcontainer**: the image (`cloud-practitioner/agentic-devcontainer`) brings its own Node.js and pnpm (with `PNPM_HOME`), so the container profile has no nvm and its activation keeps the image's `PATH` to find them.
+- **Devcontainer**: the image (`cloud-practitioner/agentic-devcontainer`) brings its own Node.js and pnpm (with `PNPM_HOME`), so the container profile has no nvm and its activation keeps the image's `PATH` to find them. The image installs no Claude Code, Pi, or Copilot CLI of its own, so the container profile is their only source there.
 
 Both profiles set `PNPM_HOME` (unless already set, default `${XDG_DATA_HOME:-~/.local/share}/pnpm`, as pnpm itself) and put pnpm's global bin directories (`$PNPM_HOME/bin`, then `$PNPM_HOME` for older pnpm) on `PATH` right after `~/.nix-profile/bin` (or first, without it), once each, preceded on the workstation by `$NVM_DIR/default/bin`.
 That puts them ahead of the system directories and of the Windows `PATH` that WSL appends (`/mnt/c/...`), so a Windows Node.js or npm-global `claude`, `pi`, `copilot`, `node`, `npm`, or `pnpm` never shadows the WSL copy.
 Every zsh (through `~/.zshenv`, interactive or not, and again at the end of the interactive `~/.zshrc`, after nvm) and every bash login shell (through the Home Manager-owned `~/.bash_profile`, which then reads your own `~/.profile`) gets them, even when started from an environment that already has the Home Manager session variables; a pre-existing `~/.bash_profile` blocks `./rebuild.sh` (`bootstrap.sh` and `hm-update` rename it to `~/.bash_profile.backup` instead), so merge its contents into `~/.profile` and remove it.
-A copy an image installs in a directory ahead of `~/.nix-profile/bin` on `PATH` still comes first; for example the devcontainer image's own `~/.local/bin/claude` wins over the pnpm one.
+A copy installed in a directory ahead of `~/.nix-profile/bin` on `PATH` still comes first, so don't install another `claude`, `pi`, or `copilot` there.
 
 Apply changes the same way in each environment:
 
-- **WSL2 workstation**: `./rebuild.sh` from the repo.
+- **WSL2 workstation**: `git -C ~/.dotfiles pull --ff-only && ~/.dotfiles/rebuild.sh` (there is no `hm-update` here).
 - **Devcontainer**: `hm-update` (pulls `~/.dotfiles` and re-switches the container profile).
 
 To check without applying, `bash tests/upstream-tools.test.sh` checks that both profiles install the pinned herdr and that the updater behaves, and `bash tests/node-tools.test.sh` checks the nvm, Node.js, pnpm, and pnpm CLI installs against local fakes.
@@ -187,7 +195,13 @@ an interactive workstation zsh loads these three keys into it at startup - it
 may ask for their passphrases once - and they are ready before `devcontainer up`.
 `AddKeysToAgent yes` still loads a key into the agent the first time it's used.
 Edit the key paths in `sshKeys` at the top of `home.nix` and the hosts in
-`programs.ssh.matchBlocks` to match your own hosts/keys.
+`programs.ssh.settings` to match your own hosts/keys. Each block there is named
+by its `Host` pattern and uses OpenSSH's own directive names (`HostName`,
+`User`, `IdentityFile`, `IdentitiesOnly`, `AddKeysToAgent`; see
+`man ssh_config`). Home Manager's implicit defaults are off
+(`enableDefaultConfig = false`), so the `*` block lists every default this
+config keeps. `bash tests/ssh-config.test.sh` checks the generated
+`~/.ssh/config` and that no profile evaluates with a Home Manager warning.
 
 ### Devcontainers
 
@@ -208,6 +222,13 @@ dev@x86_64-linux             # WSL2 / Linux workstation (full profile)
 dev@container-x86_64-linux   # container as user "dev"
 node@container-x86_64-linux  # container as user "node"
 ```
+
+The devcontainer image installs no coding-agent CLIs: the container profile
+provides herdr (Nix-pinned) and Claude Code, Pi, and the GitHub Copilot CLI
+(pnpm, unpinned), as [Upstream CLI tools](#upstream-cli-tools) describes. Inside
+a container, `hm-update` pulls `~/.dotfiles` and re-switches the container
+profile; it is defined only in the container profile, and a new terminal's
+welcome note reminds you of it.
 
 **Claude Code and `CLAUDE_CONFIG_DIR`.** Claude reads its user config from
 `$CLAUDE_CONFIG_DIR` when set (a devcontainer may point it into the workspace),
@@ -234,7 +255,7 @@ activation also installs the Claude files there:
   dangle; re-install it or link it by absolute path.
 
 Activation only sees the variable if the shell that runs it has it, so run
-`hm-update` / `rebuild.sh` from a shell where it is set (on macOS,
+`hm-update` (devcontainer) or `rebuild.sh` from a shell where it is set (on macOS,
 `sudo darwin-rebuild` drops it, so the `~/.claude` fallback applies there).
 Applying later from a shell without it stops at Home Manager's collision check
 on those two `~/.claude` links; delete them, or apply from a shell that has the
@@ -258,7 +279,7 @@ If you clone it, review these before you run `bootstrap.sh`:
   All three have to match.
 - **CPU architecture**, `hostPlatform` in `configuration.nix` (see Prerequisites above).
 - **Container users** (Linux): if a devcontainer's non-root user differs from your workstation username, add it to the `containerUsers` list in `flake.nix` so a `…@container-…` config exists for it.
-- **SSH keys** (Linux/WSL2): the workstation profile defines its key paths once, in `sshKeys` at the top of `home.nix`; `programs.ssh.matchBlocks` maps hosts to them and the zsh init loads them at startup. Point them at your own hosts/keys and copy the private keys into `~/.ssh` yourself - Nix doesn't manage secrets.
+- **SSH keys** (Linux/WSL2): the workstation profile defines its key paths once, in `sshKeys` at the top of `home.nix`; `programs.ssh.settings` maps hosts to them and the zsh init loads them at startup. Point them at your own hosts/keys and copy the private keys into `~/.ssh` yourself - Nix doesn't manage secrets.
 
 **Git identity:** this config deliberately does not set your git name or email.
 Git will stop your first commit and tell you to set them (`git config --global user.name "Your Name"` and `git config --global user.email you@example.com`).
@@ -300,7 +321,7 @@ If you don't use it, just remove it from `brews` in your copy.
 - `tests/` - behavior tests; run one with `bash tests/<name>.test.sh`.
 - `activation/claude-config.sh` - the activation steps that install the Claude Code files into `$CLAUDE_CONFIG_DIR` when it points somewhere other than `~/.claude` (see [Devcontainers](#devcontainers)).
 - `rebuild.sh` - re-applies the config after the first switch.
-  Auto-detects a devcontainer and picks the container profile; otherwise uses the workstation profile. Run this every time you make a change.
+  Auto-detects a devcontainer and picks the container profile; otherwise uses the workstation profile. Run this every time you make a change; on WSL2, `git -C ~/.dotfiles pull --ff-only` first to pick up pushed changes.
 - `home/` - the actual config files that get symlinked into place; the sections below explain the shared symlink model and Pi's narrower selective setup.
 
 ## How the symlinks work
