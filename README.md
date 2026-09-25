@@ -131,7 +131,7 @@ herdr, Claude Code, and Pi are not nixpkgs builds. Each is a Nix package (`tools
 | --- | --- | --- | --- |
 | Claude Code | `https://claude.ai/install.sh` | native binary from `downloads.claude.ai/claude-code-releases` | that release's `manifest.json` |
 | herdr | `https://herdr.dev/install.sh` | static binary from the GitHub release | `https://herdr.dev/latest.json` |
-| Pi | `https://pi.dev/install.sh` | the npm package `@earendil-works/pi-coding-agent` and its dependencies, from the release's `package-lock.json` (`tools/pi/`), run on the nixpkgs Node.js, whose `node` and `npm` come first on Pi's `PATH` | that lock, plus the installer API's release metadata for Pi's own packages |
+| Pi | `https://pi.dev/install.sh` | the npm package `@earendil-works/pi-coding-agent` and its dependencies, from the release's `package-lock.json` (`tools/pi/`), run on the nixpkgs Node.js, whose `node` and `npm` are only a fallback at the end of Pi's `PATH` for when none is installed | that lock, plus the installer API's release metadata for Pi's own packages |
 
 Both Linux profiles (workstation and container) install the same pins.
 A devcontainer matches the workstation only once the devcontainer repo stops installing its own copies in the image, which a separate follow-up change there does.

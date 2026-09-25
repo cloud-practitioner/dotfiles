@@ -6,8 +6,8 @@
 # - both Linux home profiles (workstation and container) for this machine's
 #   system install exactly the pinned builds from tools/sources.json;
 # - the built profiles' tools report the pinned versions, Pi runs on its own
-#   Nix Node.js and hands its commands that Node's npm, and self-updates refuse
-#   and write nothing;
+#   Nix Node.js and falls back to that Node's npm only when PATH has none, and
+#   self-updates refuse and write nothing;
 # - `update-tools` rewrites every version, URL, and hash (and Pi's npm lock)
 #   from vendor-shaped manifests, leaves the pins alone in --dry-run, and
 #   rejects bad manifests;
@@ -43,6 +43,25 @@ profiles() {
     | jq -r --arg s "$SYSTEM" '
         (map(select(endswith("@" + $s))) | first),
         (map(select(endswith("@container-" + $s))) | first)'
+}
+
+# Echo the npm that Pi $1 hands the commands it runs when started with PATH=$2,
+# then the Node.js Pi itself runs on. $3 is a fresh scratch directory.
+pi_npm_probe() {
+  local pi=$1 path=$2 dir=$3
+  mkdir -p "$dir/agent"
+  cat > "$dir/probe.ts" <<'TS'
+import { execFileSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+
+export default function (): void {
+  const npm = execFileSync("sh", ["-c", "command -v npm"], { encoding: "utf8" }).trim();
+  writeFileSync(process.env.NPM_PROBE as string, `${npm}\n${process.execPath}\n`);
+}
+TS
+  (cd "$dir" && HOME=$dir PI_CODING_AGENT_DIR="$dir/agent" PI_OFFLINE=1 NPM_PROBE="$dir/out" \
+    PATH=$path "$pi" -e ./probe.ts -p probe </dev/null >/dev/null 2>&1)
+  cat "$dir/out" 2>/dev/null
 }
 
 have_linux_nix() {
@@ -91,27 +110,20 @@ test_built_profiles_run_pinned_versions() {
       || fail "$profile: herdr --version is not the pinned version"
     [ "$(env -i HOME="$home" PATH=/var/empty "$out/home-path/bin/pi" --version)" = "$(pin pi version "$SOURCES")" ] \
       || fail "$profile: pi does not run the pinned version on its own Node.js (no node on PATH)"
-    # Pi spawns `npm` for the packages it installs itself; a decoy npm first on
-    # PATH (like the devcontainer image's) must not win over the pinned Node's.
+    # Pi spawns `npm` for the packages it installs itself and for the agent's
+    # commands. An npm already on PATH (the image's Node, nvm) must win; the
+    # pinned Node's npm is only the fallback when PATH has none.
     probe="$home/npm-probe"
-    mkdir -p "$probe/decoy" "$probe/agent"
-    printf '#!/bin/sh\nexit 1\n' > "$probe/decoy/npm"
-    chmod +x "$probe/decoy/npm"
-    cat > "$probe/probe.ts" <<'TS'
-import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
-
-export default function (): void {
-  const npm = execFileSync("sh", ["-c", "command -v npm"], { encoding: "utf8" }).trim();
-  writeFileSync(process.env.NPM_PROBE as string, `${npm}\n${process.execPath}\n`);
-}
-TS
-    (cd "$probe" && HOME=$home PI_CODING_AGENT_DIR="$probe/agent" PI_OFFLINE=1 NPM_PROBE="$probe/out" \
-      PATH="$probe/decoy:/usr/bin:/bin" "$out/home-path/bin/pi" -e ./probe.ts -p probe </dev/null >/dev/null 2>&1)
-    [ -f "$probe/out" ] || fail "$profile: pi did not load the npm probe extension"
-    { read -r npm; read -r node; } < "$probe/out"
-    [ "$(readlink -f "$(dirname "$npm")/node")" = "$node" ] \
-      || fail "$profile: pi hands its commands npm $npm, not the npm of the Node.js it runs on ($node)"
+    mkdir -p "$probe/other" "$probe/bin"
+    printf '#!/bin/sh\nexit 1\n' > "$probe/other/npm"
+    chmod +x "$probe/other/npm"
+    ln -s "$(command -v sh)" "$probe/bin/sh"
+    { read -r npm; read -r node; } < <(pi_npm_probe "$out/home-path/bin/pi" "$probe/bin" "$probe/without-npm")
+    [ -n "$npm" ] && [ "$(readlink -f "$(dirname "$npm")/node")" = "$node" ] \
+      || fail "$profile: with no npm on PATH, pi does not fall back to the npm of the Node.js it runs on: npm='$npm' node='$node'"
+    { read -r npm; read -r node; } < <(pi_npm_probe "$out/home-path/bin/pi" "$probe/other:$probe/bin" "$probe/with-npm")
+    [ "$npm" = "$probe/other/npm" ] \
+      || fail "$profile: pi hands its commands npm '$npm' instead of the npm already on PATH"
     update_home="$home/claude-update"
     mkdir -p "$update_home"
     update=$(HOME=$update_home CLAUDE_CONFIG_DIR="$update_home/.claude" "$out/home-path/bin/claude" update </dev/null 2>&1)
