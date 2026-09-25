@@ -12,8 +12,9 @@ case "$(uname -m)" in
   *) echo "Unsupported CPU: $(uname -m)" >&2; exit 1 ;;
 esac
 # Inside a devcontainer, apply the container profile: same shell/tools but no
-# host SSH agent/keys (git auth comes from the WSL2 host via VS Code's forwarded
-# agent, using plain github.com URLs).
+# host SSH agent/config. The devcontainer (cloud-practitioner/agentic-devcontainer)
+# bind-mounts the host ~/.ssh read-only, proxies the WSL2 ssh-agent socket, and
+# recreates the host aliases in its Dockerfile.
 PROFILE_PREFIX=""
 if [ -f /.dockerenv ] || [ -n "${REMOTE_CONTAINERS:-}" ] || [ -n "${CODESPACES:-}" ]; then
   PROFILE_PREFIX="container-"

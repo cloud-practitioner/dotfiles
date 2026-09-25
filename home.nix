@@ -6,6 +6,13 @@ let
   # identities) so the same shell/tools can be reused inside a devcontainer
   # that borrows the WSL2 host's forwarded agent instead.
   isWorkstation = profile == "workstation";
+  # Private keys behind the SSH host aliases (programs.ssh), which the
+  # workstation zsh init also loads into an empty agent.
+  sshKeys = {
+    ghWork = "~/.ssh/id_ed25519_gh_work";
+    ghPersonal = "~/.ssh/id_ed25519_gh_personal";
+    bbWork = "~/.ssh/id_ed25519_bb_work";
+  };
 in
 
 {
@@ -30,7 +37,8 @@ in
     herdr
   ] ++ lib.optionals (stdenv.isLinux && isWorkstation) [
     # Workstation only. The devcontainer installs Claude Code via the official
-    # installer (Dockerfile), so its Nix profile omits this nixpkgs build.
+    # installer (Dockerfile in cloud-practitioner/agentic-devcontainer), so its
+    # Nix profile omits this nixpkgs build.
     claude-code
     # Build/run devcontainers from the CLI; needs a Docker host.
     devcontainer
@@ -97,6 +105,22 @@ in
         export HM_WELCOME_SHOWN=1
         print -P "%F{blue}dotfiles%f $(git -C "$HOME/.dotfiles" rev-parse --short HEAD 2>/dev/null) - run %F{green}hm-update%f to pull latest and re-switch"
       fi
+    '' + lib.optionalString (pkgs.stdenv.isLinux && isWorkstation) ''
+
+      # The systemd ssh-agent starts empty; when it is reachable but has no
+      # identities (exit 1), load the keys so `ssh-add -l` is populated before
+      # launching devcontainers. Skips when keys are present (0) or no agent (2).
+      if [[ -o interactive ]]; then
+        ssh-add -l >/dev/null 2>&1
+        if [ "$?" = 1 ]; then
+          # Catch Ctrl+C so cancelling a passphrase prompt stops only ssh-add, not the rest of .zshrc.
+          trap : INT
+          ssh-add ${sshKeys.ghWork} \
+                  ${sshKeys.ghPersonal} \
+                  ${sshKeys.bbWork} 2>/dev/null
+          trap - INT
+        fi
+      fi
     '';
     shellAliases = {
       ".." = "cd ..";
@@ -111,9 +135,12 @@ in
 
   # SSH client config lives in the repo so a throwaway WSL2 instance comes up
   # with the same host aliases every time. The private keys themselves are not
-  # managed by Nix - drop them into ~/.ssh out of band. Workstation-only: a
-  # devcontainer has no keys and no systemd, and borrows the host's forwarded
-  # agent with plain github.com URLs instead.
+  # managed by Nix - drop them into ~/.ssh out of band. Workstation-only: the
+  # devcontainer (cloud-practitioner/agentic-devcontainer) reuses these keys via
+  # a read-only ~/.ssh bind mount plus the proxied WSL2 ssh-agent socket, under
+  # both VS Code and the devcontainer CLI. This ~/.ssh/config is a Nix-store
+  # symlink that dangles inside the container, so that repo's Dockerfile
+  # recreates these host aliases.
   programs.ssh = lib.mkIf isWorkstation {
     enable = true;
     matchBlocks = {
@@ -121,19 +148,19 @@ in
       "github.com-personal" = {
         hostname = "github.com";
         user = "git";
-        identityFile = "~/.ssh/id_ed25519_gh_personal";
+        identityFile = sshKeys.ghPersonal;
         identitiesOnly = true;
       };
       "github.com-work" = {
         hostname = "github.com";
         user = "git";
-        identityFile = "~/.ssh/id_ed25519_gh_work";
+        identityFile = sshKeys.ghWork;
         identitiesOnly = true;
       };
       "bitbucket.org-work" = {
         hostname = "bitbucket.org";
         user = "git";
-        identityFile = "~/.ssh/id_ed25519_bb_work";
+        identityFile = sshKeys.bbWork;
         identitiesOnly = true;
       };
     };

@@ -134,16 +134,24 @@ git@bitbucket.org-work    ->  ~/.ssh/id_ed25519_bb_work
 ```
 
 The **private keys are not managed by Nix** - copy them into `~/.ssh` yourself
-(mode 600). `AddKeysToAgent yes` loads a key into the agent the first time it's
-used. Edit `programs.ssh.matchBlocks` in `home.nix` to match your own hosts/keys.
+(mode 600). The agent starts empty on every WSL2 start, so whenever it is empty
+an interactive workstation zsh loads these three keys into it at startup - it
+may ask for their passphrases once - and they are ready before `devcontainer up`.
+`AddKeysToAgent yes` still loads a key into the agent the first time it's used.
+Edit the key paths in `sshKeys` at the top of `home.nix` and the hosts in
+`programs.ssh.matchBlocks` to match your own hosts/keys.
 
 ### Devcontainers
 
 `home.nix` takes a `profile` argument. The `container` profile reuses everything
-(zsh, starship, packages, tools) but drops the host SSH machinery - no agent, no
-aliased keys - because a container has no systemd and no private keys. Git auth
-inside the container comes from VS Code forwarding the host's SSH agent, using
-plain `git@github.com:owner/repo.git` URLs.
+(zsh, starship, packages, tools) but drops the host SSH machinery - no agent
+service, no `~/.ssh/config`, no startup key loading - because a container has no
+systemd and borrows the host's keys and agent instead. The devcontainer, defined
+in `cloud-practitioner/agentic-devcontainer`, bind-mounts the host's `~/.ssh`
+read-only and proxies the WSL2 ssh-agent socket into the container, under both
+VS Code and the devcontainer CLI. The host's `~/.ssh/config` is a Nix-store
+symlink that dangles inside the container, so that repo's `Dockerfile` recreates
+the host aliases.
 
 `flake.nix` exposes both profiles as home-manager configs:
 
@@ -170,7 +178,7 @@ If you clone it, review these before you run `bootstrap.sh`:
   All three have to match.
 - **CPU architecture**, `hostPlatform` in `configuration.nix` (see Prerequisites above).
 - **Container users** (Linux): if a devcontainer's non-root user differs from your workstation username, add it to the `containerUsers` list in `flake.nix` so a `…@container-…` config exists for it.
-- **SSH keys** (Linux/WSL2): the workstation profile references keys by path in `home.nix`'s `programs.ssh.matchBlocks`. Point them at your own hosts/keys and copy the private keys into `~/.ssh` yourself - Nix doesn't manage secrets.
+- **SSH keys** (Linux/WSL2): the workstation profile defines its key paths once, in `sshKeys` at the top of `home.nix`; `programs.ssh.matchBlocks` maps hosts to them and the zsh init loads them at startup. Point them at your own hosts/keys and copy the private keys into `~/.ssh` yourself - Nix doesn't manage secrets.
 
 **Git identity:** this config deliberately does not set your git name or email.
 Git will stop your first commit and tell you to set them (`git config --global user.name "Your Name"` and `git config --global user.email you@example.com`).
