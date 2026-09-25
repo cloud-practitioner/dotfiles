@@ -41,8 +41,7 @@ SCRIPT="$ROOT/activation/claude-config.sh"
 SRC_SETTINGS="$ROOT/home/.claude/settings.json"
 SRC_AGENTS="$ROOT/home/AGENTS.md"
 SRC_SUM=$(sha256sum <"$SRC_SETTINGS")
-TMP_ROOT=
-dotfiles_test_tmproot TMP_ROOT claude-config
+dotfiles_test_tmproot claude-config
 CASE=0
 OUT=
 
@@ -435,15 +434,20 @@ assert_link "$H/.claude/skills" "$TMP_ROOT/$CASE/elsewhere" "linked skills: left
 pass "a ~/.claude/skills that is already a link is left alone"
 
 # A moved skill link still reads, however its target was written: relative,
-# absolute through a symlinked directory, or absolute through ~/.claude/skills.
+# absolute through a symlinked directory, absolute through ~/.claude/skills, or
+# with a trailing slash.
 new_case
-mkdir -p "$H/data/foo" "$H/.agents/skills/viahome" "$H/.claude/skills"
+mkdir -p "$H/data/foo" "$H/.agents/skills/viahome" "$H/.agents/skills/relslash" "$H/.agents/skills/absslash" "$H/.claude/skills"
 ln -s "$H/data/proj" "$H/proj"
 mkdir -p "$H/data/proj"
 printf 'foo\n' >"$H/data/foo/SKILL.md"
 printf 'viahome\n' >"$H/.agents/skills/viahome/SKILL.md"
 ln -s "$H/proj/../foo" "$H/.claude/skills/foo"
 ln -s "$H/.claude/skills/../../.agents/skills/viahome" "$H/.claude/skills/viahome"
+printf 'relslash\n' >"$H/.agents/skills/relslash/SKILL.md"
+printf 'absslash\n' >"$H/.agents/skills/absslash/SKILL.md"
+ln -s ../../.agents/skills/relslash/ "$H/.claude/skills/relslash"
+ln -s "$H/.agents/skills/absslash//" "$H/.claude/skills/absslash"
 [ "$(cat "$H/.claude/skills/foo/SKILL.md")" = foo ] && [ "$(cat "$H/.claude/skills/viahome/SKILL.md")" = viahome ] ||
   fail "moved links: fixtures read before activation"
 activate "$C"
@@ -451,4 +455,6 @@ activate "$C"
 assert_link "$H/.claude/skills" "$C/skills" "moved links: ~/.claude/skills becomes the link"
 [ "$(cat "$C/skills/foo/SKILL.md" 2>&1)" = foo ] || fail "moved links: absolute target through a symlinked directory still reads"
 [ "$(cat "$C/skills/viahome/SKILL.md" 2>&1)" = viahome ] || fail "moved links: absolute target through ~/.claude/skills still reads"
+[ "$(cat "$C/skills/relslash/SKILL.md" 2>&1)" = relslash ] || fail "moved links: relative target with a trailing slash still reads"
+[ "$(cat "$C/skills/absslash/SKILL.md" 2>&1)" = absslash ] || fail "moved links: absolute target with trailing slashes still reads"
 pass "a moved skill link still reaches what it reached before the move"

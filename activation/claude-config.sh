@@ -158,6 +158,7 @@ is_json_object() {
 moved_link_target() {
   local link=$1 target
   target=$(readlink -- "$link")
+  target=${target%"${target##*[!/]}"}
   case $target in
     /*) ;;
     *) target="$(dirname -- "$link")/$target" ;;
