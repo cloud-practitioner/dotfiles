@@ -206,4 +206,18 @@ in
     config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/AGENTS.md";
   home.file.".config/opencode/AGENTS.md".source =
     config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/AGENTS.md";
+
+  # Claude Code reads $CLAUDE_CONFIG_DIR when set, else ~/.claude, and only
+  # activation can see that variable. When it points elsewhere,
+  # activation/claude-config.sh installs the Claude files into it and re-points
+  # the two ~/.claude links above there, dropping its own links again before
+  # the next collision check. Unset, it does nothing.
+  home.activation.claudeConfigUnlink = lib.hm.dag.entryBefore [ "checkLinkTargets" ] ''
+    run ${pkgs.bash}/bin/bash ${./activation/claude-config.sh} unlink
+  '';
+  home.activation.claudeConfig = lib.hm.dag.entryAfter [ "linkGeneration" ] ''
+    run ${pkgs.bash}/bin/bash ${./activation/claude-config.sh} install \
+      ${lib.escapeShellArg "${dotfiles}/home/.claude/settings.json"} \
+      ${lib.escapeShellArg "${dotfiles}/home/AGENTS.md"}
+  '';
 }
