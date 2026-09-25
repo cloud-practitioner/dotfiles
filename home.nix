@@ -113,6 +113,7 @@ in
       if [[ -o interactive ]]; then
         ssh-add -l >/dev/null 2>&1
         if [ "$?" = 1 ]; then
+          # Catch Ctrl+C so cancelling a passphrase prompt stops only ssh-add, not the rest of .zshrc.
           trap : INT
           ssh-add ${sshKeys.ghWork} \
                   ${sshKeys.ghPersonal} \
