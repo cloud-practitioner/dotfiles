@@ -214,27 +214,42 @@ in
   # both VS Code and the devcontainer CLI. This ~/.ssh/config is a Nix-store
   # symlink that dangles inside the container, so that repo's Dockerfile
   # recreates these host aliases.
+  # Blocks use OpenSSH directive names (ssh_config(5)). Home Manager's legacy
+  # defaults are off (enableDefaultConfig), so the `*` block spells out the
+  # ones this config always had, keeping ~/.ssh/config unchanged.
   programs.ssh = lib.mkIf isWorkstation {
     enable = true;
-    matchBlocks = {
-      "*".addKeysToAgent = "yes";
+    enableDefaultConfig = false;
+    settings = {
+      "*" = {
+        AddKeysToAgent = "yes";
+        ForwardAgent = false;
+        Compression = false;
+        ServerAliveInterval = 0;
+        ServerAliveCountMax = 3;
+        HashKnownHosts = false;
+        UserKnownHostsFile = "~/.ssh/known_hosts";
+        ControlMaster = "no";
+        ControlPath = "~/.ssh/master-%r@%n:%p";
+        ControlPersist = "no";
+      };
       "github.com-personal" = {
-        hostname = "github.com";
-        user = "git";
-        identityFile = sshKeys.ghPersonal;
-        identitiesOnly = true;
+        HostName = "github.com";
+        User = "git";
+        IdentityFile = sshKeys.ghPersonal;
+        IdentitiesOnly = true;
       };
       "github.com-work" = {
-        hostname = "github.com";
-        user = "git";
-        identityFile = sshKeys.ghWork;
-        identitiesOnly = true;
+        HostName = "github.com";
+        User = "git";
+        IdentityFile = sshKeys.ghWork;
+        IdentitiesOnly = true;
       };
       "bitbucket.org-work" = {
-        hostname = "bitbucket.org";
-        user = "git";
-        identityFile = sshKeys.bbWork;
-        identitiesOnly = true;
+        HostName = "bitbucket.org";
+        User = "git";
+        IdentityFile = sshKeys.bbWork;
+        IdentitiesOnly = true;
       };
     };
   };
