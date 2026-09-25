@@ -63,9 +63,9 @@ in
       bindkey '^[[3~' delete-char              # Delete
       # Shift+Enter inserts a newline instead of running the line.
       _insert-newline() { LBUFFER+=$'\n' }
-      zle -N _insert-newline
-      bindkey '^[[27;2;13~' _insert-newline    # Shift+Enter as Herdr sends it to the shell
-      bindkey '^[[13;2u' _insert-newline       # Shift+Enter (CSI-u / kitty keyboard terminals)
+      zle -N insert-newline _insert-newline
+      bindkey '^[[27;2;13~' insert-newline     # Shift+Enter as Herdr sends it to the shell
+      bindkey '^[[13;2u' insert-newline        # Shift+Enter (CSI-u / kitty keyboard terminals)
     '' + lib.optionalString (!isWorkstation) ''
 
       # Devcontainer only. Make single-user Nix usable, including after a
