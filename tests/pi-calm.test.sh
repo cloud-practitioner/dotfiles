@@ -17,8 +17,8 @@
 #   degradation with one clear diagnostic;
 # - working ship: geometry, cadence, colors, resize, narrow fallback,
 #   freeze/resume, timer disposal, extension lifecycle;
-# - real Pi TUI proofs in tmux, against the Pi version pinned in
-#   tools/sources.json, without credentials or provider calls.
+# - real Pi TUI proofs in tmux, against whatever `pi` is on PATH, without
+#   credentials or provider calls.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -26,10 +26,27 @@ set -u
 
 dotfiles_test_tmproot pi-calm
 CALM_DIR="$ROOT/home/.pi/agent/extensions/calm"
-# The package behind the `pi` on PATH, in npm's global prefix layout
-# (<prefix>/bin/pi beside <prefix>/lib/node_modules), which the Nix build mirrors.
-PI_BIN=$(command -v pi 2>/dev/null || true)
-PI_PACKAGE_DIR=${PI_CALM_TEST_PACKAGE_DIR:-"${PI_BIN%/bin/pi}/lib/node_modules/@earendil-works/pi-coding-agent"}
+# The package behind the `pi` on PATH. Home Manager installs Pi with
+# `pnpm add -g`, whose bin is a shell shim naming the package's path relative
+# to the shim; `npm install -g` instead symlinks <prefix>/bin/pi into
+# <prefix>/lib/node_modules. Without a pi on PATH every test that needs the
+# package skips.
+pi_package_dir() {
+  local bin real rel pkg=node_modules/@earendil-works/pi-coding-agent
+  bin=$(command -v pi 2>/dev/null) || return 0
+  real=$(readlink -f "$bin")
+  case "$real" in
+    */"$pkg"/*) printf '%s\n' "${real%%/"$pkg"/*}/$pkg"; return 0 ;;
+  esac
+  rel=$(grep -o "\"\$basedir/[^\"]*/$pkg/" "$real" 2>/dev/null | head -n1) || true
+  if [ -n "$rel" ]; then
+    rel=${rel#\"\$basedir/}
+    (cd "$(dirname "$real")/${rel%/}" 2>/dev/null && pwd -P)
+    return 0
+  fi
+  printf '%s\n' "${bin%/bin/pi}/lib/$pkg"
+}
+PI_PACKAGE_DIR=${PI_CALM_TEST_PACKAGE_DIR:-$(pi_package_dir)}
 TMUX_SOCKET="pi-calm-test-$$"
 TMUX_SESSION="pi-calm-e2e"
 
@@ -82,7 +99,7 @@ find_chrome() {
 
 # Link Pi's own copy of dependency $1 into fixture $2, found the way Node
 # resolves it from Pi's real package directory: nested under it (npm install
-# -g) or hoisted beside it (the pi.dev installer and the Nix build).
+# -g) or beside it (pnpm's global store, the pi.dev installer).
 link_pi_dependency() {
   local dep=$1 fixture=$2 dir
   dir=$(cd "$PI_PACKAGE_DIR" && pwd -P)
@@ -110,7 +127,7 @@ build_node_fixture() {
 }
 
 have_pi_package() {
-  [ -f "$PI_PACKAGE_DIR/package.json" ]
+  [ -n "$PI_PACKAGE_DIR" ] && [ -f "$PI_PACKAGE_DIR/package.json" ]
 }
 
 test_zero_coupling_and_state_file() {
@@ -171,8 +188,12 @@ test_static_typescript_and_repo_wiring() {
   [ -f "$CALM_DIR/LICENSE" ] || fail "calm license file missing"
 
   # JavaScript syntax of the pre-existing extension stays valid.
-  node --check "$ROOT/home/.pi/agent/extensions/terminal-status-title.js" \
-    || fail "terminal-status-title.js has a JavaScript syntax error"
+  if command -v node >/dev/null 2>&1; then
+    node --check "$ROOT/home/.pi/agent/extensions/terminal-status-title.js" \
+      || fail "terminal-status-title.js has a JavaScript syntax error"
+  else
+    echo "skip: node not found for the JavaScript syntax check"
+  fi
 
   if ! have_pi_package; then
     echo "skip: installed @earendil-works/pi-coding-agent package not found for TypeScript check"
@@ -603,14 +624,11 @@ JS
 }
 
 test_real_pi_tui_smoke() {
-  local fixture agent project socket pane i pinned
+  local fixture agent project socket pane i
   if ! command -v pi >/dev/null 2>&1 || ! command -v tmux >/dev/null 2>&1; then
     echo "skip: pi or tmux not found for isolated real TUI smoke"
     return 0
   fi
-  pinned=$(jq -r .pi.version "$ROOT/tools/sources.json")
-  [ "$(pi --version 2>/dev/null || true)" = "$pinned" ] \
-    || fail "real Pi smoke requires the installed Pi to be the pinned $pinned (tools/sources.json); rebuild the home profile"
 
   fixture="$TMP_ROOT/tui-smoke"
   agent="$fixture/agent"
@@ -725,7 +743,7 @@ TS
   tmux -L "$socket" send-keys -t "$TMUX_SESSION" Enter
   sleep 0.1
   tmux -L "$socket" kill-server 2>/dev/null || true
-  pass "isolated pinned Pi TUI proves auto-load, /calm persistence, resize-safe working animation, and genuine transcript text without credentials"
+  pass "isolated real Pi TUI proves auto-load, /calm persistence, resize-safe working animation, and genuine transcript text without credentials"
 }
 
 test_zero_coupling_and_state_file

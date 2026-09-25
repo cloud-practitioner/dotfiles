@@ -13,6 +13,39 @@ let
     ghPersonal = "~/.ssh/id_ed25519_gh_personal";
     bbWork = "~/.ssh/id_ed25519_bb_work";
   };
+  # Moves these PATH entries right after ~/.nix-profile/bin (herdr), or to the
+  # front without it, once each, so they win over the system's and WSL's
+  # Windows-interop (/mnt/*) copies: pnpm's global bins (Claude Code, Pi,
+  # GitHub Copilot CLI; $PNPM_HOME/bin for pnpm 11+, $PNPM_HOME for older
+  # pnpm) and, on the workstation first, $NVM_DIR/default/bin (nvm's default
+  # Node.js, npm, and pnpm, linked by tools/node-tools.sh). It sets PNPM_HOME
+  # and NVM_DIR itself, with the same defaults as tools/node-tools.sh (and
+  # pnpm): an image's own PNPM_HOME wins.
+  nodePath = pkgs.writeText "node-tools-path.sh" (''
+    export PNPM_HOME="''${PNPM_HOME:-''${XDG_DATA_HOME:-$HOME/.local/share}/pnpm}"
+  '' + lib.optionalString isWorkstation ''
+    export NVM_DIR="''${NVM_DIR:-$HOME/.nvm}"
+  '' + ''
+    __nt_front="${lib.concatStringsSep ":" (lib.optional isWorkstation "$NVM_DIR/default/bin" ++ [ "$PNPM_HOME/bin" "$PNPM_HOME" ])}"
+    __nt_rest="$PATH:"
+    __nt_path=
+    __nt_placed=
+    while [ -n "$__nt_rest" ]; do
+      __nt_dir=''${__nt_rest%%:*}
+      __nt_rest=''${__nt_rest#*:}
+      case ":$__nt_front:" in
+        *":$__nt_dir:"*) continue ;;
+      esac
+      __nt_path=''${__nt_path:+$__nt_path:}$__nt_dir
+      if [ -z "$__nt_placed" ] && [ "$__nt_dir" = "$HOME/.nix-profile/bin" ]; then
+        __nt_path=$__nt_path:$__nt_front
+        __nt_placed=1
+      fi
+    done
+    [ -n "$__nt_placed" ] || __nt_path=$__nt_front''${__nt_path:+:$__nt_path}
+    export PATH="$__nt_path"
+    unset __nt_front __nt_rest __nt_path __nt_placed __nt_dir
+  '');
 in
 
 {
@@ -33,17 +66,49 @@ in
   ] ++ lib.optionals stdenv.isLinux [
     # Linux equivalents of the macOS Homebrew casks/brews in configuration.nix.
     wezterm
-    # Vendor releases pinned in tools/ (flake.nix overlay), the same in both
-    # Linux profiles.
+    # herdr's vendor release pinned in tools/ (flake.nix overlay), the same in
+    # both Linux profiles. Claude Code, Pi, and the GitHub Copilot CLI are not
+    # Nix packages: the nodeTools activation below installs them unpinned with
+    # pnpm.
     upstream-tools.herdr
-    upstream-tools.claude-code
-    upstream-tools.pi
   ] ++ lib.optionals (stdenv.isLinux && isWorkstation) [
     # Build/run devcontainers from the CLI; needs a Docker host.
     devcontainer
   ];
   fonts.fontconfig.enable = true;
   home.sessionVariables.EDITOR = "nvim";
+  # Every Linux shell, not just interactive zsh, runs nodePath (above), even
+  # when an older environment marks the session variables as already sourced:
+  # zsh from ~/.zshenv (programs.zsh.envExtra), a bash login shell from here,
+  # after the session variables and before the distro's own ~/.profile (and
+  # through it ~/.bashrc), which Home Manager leaves alone. The interactive
+  # workstation zsh then loads nvm itself.
+  home.file.".bash_profile" = lib.mkIf pkgs.stdenv.isLinux {
+    text = ''
+      . "${config.home.sessionVariablesPackage}/etc/profile.d/hm-session-vars.sh"
+      . ${nodePath}
+      [ -f "$HOME/.profile" ] && . "$HOME/.profile"
+    '';
+  };
+
+  # Claude Code, Pi, and the GitHub Copilot CLI, unpinned from pnpm, at every
+  # Linux switch when missing (tools/node-tools.sh). The WSL2 workstation first
+  # gets nvm, Node.js LTS as nvm's default, and pnpm; a container uses its
+  # image's Node.js and pnpm. A failure (no pnpm, offline) only warns, so the
+  # switch still completes; the next switch retries.
+  home.activation.nodeTools = lib.mkIf pkgs.stdenv.isLinux (
+    lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+      if ! run env PATH="${lib.makeBinPath (with pkgs; [
+          bash coreutils curl findutils gawk git gnugrep gnused gnutar gzip xz
+        ])}:$PATH" \
+        ${pkgs.bash}/bin/bash ${./tools/node-tools.sh} ${if isWorkstation then "workstation" else "container"}; then
+        warnEcho "tools/node-tools.sh failed (see above): ${if isWorkstation then "nvm, Node.js, pnpm, " else ""}Claude Code, Pi, or the GitHub Copilot CLI may be missing. Fix that, then switch again."
+      fi
+    ''
+  );
+  # The container's activation keeps the user's PATH (after Home Manager's own
+  # tools), so tools/node-tools.sh finds the image's Node.js and pnpm.
+  home.emptyActivationPath = lib.mkIf (pkgs.stdenv.isLinux && !isWorkstation) false;
 
   # On macOS the nix-darwin module drives home-manager, but standalone Linux
   # needs its own `home-manager` CLI (used by rebuild.sh).
@@ -55,6 +120,9 @@ in
     defaultKeymap = "emacs";
     autosuggestion.enable = true;      # ghost text from history
     syntaxHighlighting.enable = true;  # commands turn green when valid
+    envExtra = lib.optionalString pkgs.stdenv.isLinux ''
+      . ${nodePath}
+    '';
     initContent = ''
       bindkey '^f' autosuggest-accept
 
@@ -103,6 +171,11 @@ in
       fi
     '' + lib.optionalString (pkgs.stdenv.isLinux && isWorkstation) ''
 
+      # nvm (installed by the nodeTools activation, tools/node-tools.sh) puts
+      # its default Node.js, npm, and pnpm first on PATH. Containers skip this:
+      # the devcontainer image brings its own Node.js and pnpm.
+      [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+
       # The systemd ssh-agent starts empty; when it is reachable but has no
       # identities (exit 1), load the keys so `ssh-add -l` is populated before
       # launching devcontainers. Skips when keys are present (0) or no agent (2).
@@ -117,6 +190,10 @@ in
           trap - INT
         fi
       fi
+    '' + lib.optionalString pkgs.stdenv.isLinux ''
+
+      # Again after the global rc files and nvm, which may reorder PATH.
+      . ${nodePath}
     '';
     shellAliases = {
       ".." = "cd ..";
