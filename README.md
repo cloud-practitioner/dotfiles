@@ -172,8 +172,8 @@ A copy installed in a directory ahead of `~/.nix-profile/bin` on `PATH` still co
 
 Apply changes the same way in each environment:
 
-- **WSL2 workstation**: `git -C ~/.dotfiles pull --ff-only && ~/.dotfiles/rebuild.sh` (there is no `hm-update` here).
-- **Devcontainer**: `hm-update` (pulls `~/.dotfiles` and re-switches the container profile).
+- **WSL2 workstation**: pull and re-run `rebuild.sh`, as [Linux](#linux) shows.
+- **Devcontainer**: `hm-update`, as [Devcontainers](#devcontainers) shows.
 
 To check without applying, `bash tests/upstream-tools.test.sh` checks that both profiles install the pinned herdr and that the updater behaves, and `bash tests/node-tools.test.sh` checks the nvm, Node.js, pnpm, and pnpm CLI installs against local fakes.
 
@@ -321,7 +321,7 @@ If you don't use it, just remove it from `brews` in your copy.
 - `tests/` - behavior tests; run one with `bash tests/<name>.test.sh`.
 - `activation/claude-config.sh` - the activation steps that install the Claude Code files into `$CLAUDE_CONFIG_DIR` when it points somewhere other than `~/.claude` (see [Devcontainers](#devcontainers)).
 - `rebuild.sh` - re-applies the config after the first switch.
-  Auto-detects a devcontainer and picks the container profile; otherwise uses the workstation profile. Run this every time you make a change; on WSL2, `git -C ~/.dotfiles pull --ff-only` first to pick up pushed changes.
+  Auto-detects a devcontainer and picks the container profile; otherwise uses the workstation profile. Run this every time you make a change; to pick up pushed changes on WSL2, pull first (see [Linux](#linux)).
 - `home/` - the actual config files that get symlinked into place; the sections below explain the shared symlink model and Pi's narrower selective setup.
 
 ## How the symlinks work
