@@ -1,18 +1,4 @@
 {
-  "claude-code": {
-    "version": "2.1.282",
-    "checksums": "https://downloads.claude.ai/claude-code-releases/2.1.282/manifest.json",
-    "platforms": {
-      "x86_64-linux": {
-        "url": "https://downloads.claude.ai/claude-code-releases/2.1.282/linux-x64/claude",
-        "sha256": "3afe8535c0cc33f0e24f7b25dab7a1727b8b592196f8496a8bc302ba2161eed3"
-      },
-      "aarch64-linux": {
-        "url": "https://downloads.claude.ai/claude-code-releases/2.1.282/linux-arm64/claude",
-        "sha256": "6764ffc39e9fed425a493ff61ea28506d1ba83996ce81a48d1177dbb393419c9"
-      }
-    }
-  },
   "herdr": {
     "version": "0.9.1",
     "checksums": "https://herdr.dev/latest.json",
@@ -26,9 +12,5 @@
         "sha256": "f4ccf4de745f2cb9a39a983e9ba3703dad50ec2a58dea83026ceab721bbd8d9e"
       }
     }
-  },
-  "pi": {
-    "version": "0.87.1",
-    "checksums": "https://pi.dev/api/installer/releases/0.87.1/package-lock.json"
   }
 }

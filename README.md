@@ -28,7 +28,7 @@ Running the switch builds:
 - System settings (dark mode, key repeat, dock, Finder, trackpad)
 - Homebrew apps (casks and CLI tools)
 - Nix user packages (ripgrep, fd, fzf, jq, lazygit, Neovim, Hack Nerd Font)
-- On Linux, herdr, Claude Code, and Pi pinned to their vendors' own release builds (see [Upstream CLI tools](#upstream-cli-tools))
+- On Linux, herdr pinned to its vendor's own release build, and Claude Code, Pi, and the GitHub Copilot CLI unpinned from pnpm, which the WSL2 workstation gets from nvm's Node.js LTS (see [Upstream CLI tools](#upstream-cli-tools))
 - Shell (zsh, aliases, starship prompt)
 - Editor (Neovim config with the rose-pine moon theme)
 - Terminal (WezTerm config with the rose-pine moon theme and dimmed unfocused windows)
@@ -67,7 +67,7 @@ Change the host label or CPU architecture if needed, and read the Homebrew clean
 3. Checks the `user` configured in `flake.nix` against your actual username, and offers to fix it for you if they differ.
 4. Runs the first switch.
    On macOS it fetches the `darwin-rebuild` tool from the nix-darwin 26.05 release branch, then applies this repo's locked flake config.
-   On Linux it runs the first `home-manager switch` instead (see [Linux](#linux)).
+   On Linux it runs the first `home-manager switch` instead (see [Linux](#linux)), which on the WSL2 workstation also installs nvm, Node.js LTS, pnpm, and the pnpm CLIs (see [Upstream CLI tools](#upstream-cli-tools)).
 
 After that, `darwin-rebuild` exists and you're on the normal workflow below.
 
@@ -103,14 +103,14 @@ The same two scripts work - they detect the OS with `uname` and branch automatic
 
 ```sh
 ./bootstrap.sh   # installs Determinate Nix, then runs the first home-manager switch
-./rebuild.sh     # re-applies after changes
+./rebuild.sh     # re-applies after changes; every switch also tops up the pnpm CLIs
 ```
 
 What you get on Linux:
 
 - Nix user packages: ripgrep, fd, fzf, jq, lazygit, Neovim, Hack Nerd Font.
 - WezTerm from nixpkgs, the Linux equivalent of its macOS cask.
-- herdr, Claude Code, and Pi pinned to what each vendor's own installer installs, the same in both Linux profiles - see [Upstream CLI tools](#upstream-cli-tools).
+- herdr pinned to what its vendor's own installer installs, and Claude Code, Pi, and the GitHub Copilot CLI unpinned from pnpm, in both Linux profiles; on the WSL2 workstation, nvm with Node.js LTS and pnpm under them - see [Upstream CLI tools](#upstream-cli-tools).
 - The same symlinked shell (zsh + starship), Neovim, WezTerm, and agent configs as macOS.
 - SSH client config (per-host aliases) and an `ssh-agent` systemd user service, on the workstation profile - see [SSH](#ssh-workstation-profile).
 - A `container` profile that reuses the same shell and tools inside a devcontainer - see [Devcontainers](#devcontainers).
@@ -119,38 +119,53 @@ Notes:
 
 - **Distro-agnostic**: works on any Linux distro (and WSL) once Nix is installed. home-manager is user-level and never touches apt/dnf/pacman.
 - **Login shell**: home-manager can't change your login shell. To use zsh, run once `chsh -s "$(command -v zsh)"`, then open a new terminal. `bootstrap.sh` prints this reminder.
-- **herdr and Claude Code** come from Homebrew on macOS (`configuration.nix`); Pi is not installed there.
+- **herdr and Claude Code** come from Homebrew on macOS (`configuration.nix`); Pi and the Copilot CLI are not installed there, and none of the Node.js setup below applies.
 - Applying is per-user, so there's no `sudo` on Linux.
 - **WSL2 + systemd**: the `ssh-agent` service is a systemd *user* service, so WSL2 needs systemd enabled. Add `[boot]` / `systemd=true` to `/etc/wsl.conf`, then `wsl --shutdown` and reopen; otherwise the agent never starts and `SSH_AUTH_SOCK` stays empty.
 
 ### Upstream CLI tools
 
-herdr, Claude Code, and Pi are not nixpkgs builds. Each is a Nix package (`tools/`) that installs what the vendor's `curl ... | sh` installer would, pinned by version in `tools/sources.json` and by hash:
+Home Manager installs these CLIs on Linux instead of nixpkgs builds, in both profiles (workstation and container).
 
-| Tool | Installer it mirrors | What gets installed | Pinned hashes come from |
-| --- | --- | --- | --- |
-| Claude Code | `https://claude.ai/install.sh` | native binary from `downloads.claude.ai/claude-code-releases` | that release's `manifest.json` |
-| herdr | `https://herdr.dev/install.sh` | static binary from the GitHub release | `https://herdr.dev/latest.json` |
-| Pi | `https://pi.dev/install.sh` | the npm package `@earendil-works/pi-coding-agent` and its dependencies, from the release's `package-lock.json` (`tools/pi/`), run on the nixpkgs Node.js, whose `node` and `npm` are only a fallback at the end of Pi's `PATH` for when none is installed | that lock, plus the installer API's release metadata for Pi's own packages |
-
-Both Linux profiles (workstation and container) install the same pins.
-A devcontainer matches the workstation only once the devcontainer repo stops installing its own copies in the image, which a separate follow-up change there does.
-Until then its Dockerfile installs Claude Code with `curl -fsSL https://claude.ai/install.sh | bash` (a self-updating `~/.local/bin/claude` that comes before the Nix one on `PATH`) and Pi with `pnpm add -g --ignore-scripts @earendil-works/pi-coding-agent@latest`.
-The pin is the only way the Nix-installed tools change: Claude Code's auto-updater and `claude update` are disabled, Pi skips its version check and `pi update` refuses to replace the read-only install, and herdr refuses `herdr update` for Nix installs (its version check still tells you when a release is out).
-
-To move all three to the latest upstream releases:
+**herdr** is a Nix package (`tools/herdr.nix`) that installs what `https://herdr.dev/install.sh` would: the static binary from the GitHub release, pinned by version in `tools/sources.json` and by the SHA-256 from `https://herdr.dev/latest.json`.
+The pin is the only way it changes: herdr refuses `herdr update` for Nix installs (its version check still tells you when a release is out).
+To move it to the latest release:
 
 ```sh
-nix run .#update-tools -- --dry-run   # show the new versions and pins, change nothing
-nix run .#update-tools                # rewrite tools/sources.json and tools/pi/
+nix run .#update-tools -- --dry-run   # show the new version and pin, change nothing
+nix run .#update-tools                # rewrite tools/sources.json
 ```
 
-Commit and push the result, then apply it the same way in each environment:
+Commit and push the result, then apply it in each environment (below).
+
+**Claude Code, Pi, and the GitHub Copilot CLI** are unpinned and come from pnpm.
+Every switch runs `tools/node-tools.sh` (the `nodeTools` activation in `home.nix`, after Home Manager writes its files), which installs whichever of them is missing, with exactly:
+
+```sh
+pnpm add -g --ignore-scripts @earendil-works/pi-coding-agent
+pnpm add -g @github/copilot
+pnpm add -g --allow-build=@anthropic-ai/claude-code @anthropic-ai/claude-code
+```
+
+pnpm blocks dependency build scripts by default; Claude Code's own postinstall fetches its native binary, so only that one is allowed.
+Each CLI must answer `--version` after it is installed.
+Their own updaters (`claude update`, `pi update`, `copilot update`) keep them current; a switch never downgrades or reinstalls what is there.
+If pnpm or the network is unavailable, the switch prints a warning and still completes, and the next switch retries.
+
+Where pnpm itself comes from depends on the profile:
+
+- **WSL2 workstation**: the same activation first installs nvm with its official install script (`PROFILE=/dev/null`, so it never edits the Home Manager-owned `~/.zshrc` or `~/.bashrc`), then `nvm install --lts` as nvm's default, then `npm install -g pnpm`, the way [Microsoft's Node.js on WSL guide](https://learn.microsoft.com/en-us/windows/dev-environment/javascript/nodejs-on-wsl) does it. The workstation zsh loads nvm (`$NVM_DIR`, default `~/.nvm`), so `node`, `npm`, and `pnpm` are nvm's. As that guide advises, don't install another Node.js alongside it.
+- **Devcontainer**: the image (`cloud-practitioner/agentic-devcontainer`) brings its own Node.js and pnpm (with `PNPM_HOME`), so the container profile has no nvm and its activation keeps the image's `PATH` to find them.
+
+Both profiles' zsh put pnpm's global bin directory (`$PNPM_HOME/bin`, default `~/.local/share/pnpm/bin`) at the end of `PATH`, after `~/.nix-profile/bin`.
+A copy an image installs elsewhere on `PATH` comes first; for example the devcontainer image's own `~/.local/bin/claude` wins over the pnpm one.
+
+Apply changes the same way in each environment:
 
 - **WSL2 workstation**: `./rebuild.sh` from the repo.
 - **Devcontainer**: `hm-update` (pulls `~/.dotfiles` and re-switches the container profile).
 
-To check without applying, `bash tests/upstream-tools.test.sh` checks that both profiles install the pinned versions and that the updater behaves.
+To check without applying, `bash tests/upstream-tools.test.sh` checks that both profiles install the pinned herdr and that the updater behaves, and `bash tests/node-tools.test.sh` checks the nvm, Node.js, pnpm, and pnpm CLI installs against local fakes.
 
 ### SSH (workstation profile)
 
@@ -279,7 +294,7 @@ If you don't use it, just remove it from `brews` in your copy.
   Wires up nixpkgs, nix-darwin, home-manager, and nix-homebrew, declares the `mac` machine, and generates the Linux home-manager configs (workstation + `container` profiles for each user in `containerUsers`).
 - `configuration.nix` - system-level config: macOS defaults, Homebrew.
 - `home.nix` - user-level config: shell, packages, prompt, SSH (workstation profile), and the symlinks described below. Takes a `profile` argument (`workstation` or `container`).
-- `tools/` - the pinned upstream builds of herdr, Claude Code, and Pi (`sources.json`, and Pi's npm lock in `pi/`), plus `update.sh`, the `nix run .#update-tools` pin bumper.
+- `tools/` - the pinned upstream herdr build (`sources.json`) with `update.sh`, the `nix run .#update-tools` pin bumper, and `node-tools.sh`, which installs nvm, Node.js, and pnpm on the WSL2 workstation and Claude Code, Pi, and the Copilot CLI from pnpm at every Linux switch.
 - `tests/` - behavior tests; run one with `bash tests/<name>.test.sh`.
 - `activation/claude-config.sh` - the activation steps that install the Claude Code files into `$CLAUDE_CONFIG_DIR` when it points somewhere other than `~/.claude` (see [Devcontainers](#devcontainers)).
 - `rebuild.sh` - re-applies the config after the first switch.
@@ -295,7 +310,7 @@ The one exception is Claude Code's settings when `CLAUDE_CONFIG_DIR` points else
 
 ## Optional Pi configuration
 
-On Linux, both home profiles install Pi from its pinned npm release (see [Upstream CLI tools](#upstream-cli-tools)). On macOS, Pi is opt-in: install it from its owner with the [official Pi instructions](https://pi.dev), for example:
+On Linux, both home profiles install Pi, unpinned, with pnpm (see [Upstream CLI tools](#upstream-cli-tools)). On macOS, Pi is opt-in: install it from its owner with the [official Pi instructions](https://pi.dev), for example:
 
 ```sh
 npm install -g --ignore-scripts @earendil-works/pi-coding-agent
