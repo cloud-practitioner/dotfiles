@@ -61,7 +61,9 @@ in
       bindkey '^[[127;5u' backward-kill-word   # Ctrl+Backspace (CSI-u / kitty keyboard terminals)
       bindkey '^[[3;5~' kill-word              # Ctrl+Delete
       bindkey '^[[3~' delete-char              # Delete
-      # Shift+Enter inserts a newline instead of running the line.
+      # Shift+Enter inserts a newline instead of running the line. The widget
+      # name must not start with `_`: zsh-autosuggestions skips such widgets,
+      # which would leave stale ghost text after the newline.
       _insert-newline() { LBUFFER+=$'\n' }
       zle -N insert-newline _insert-newline
       bindkey '^[[27;2;13~' insert-newline     # Shift+Enter as Herdr sends it to the shell
