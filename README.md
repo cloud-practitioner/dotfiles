@@ -192,6 +192,38 @@ dev@container-x86_64-linux   # container as user "dev"
 node@container-x86_64-linux  # container as user "node"
 ```
 
+**Claude Code and `CLAUDE_CONFIG_DIR`.** Claude reads its user config from
+`$CLAUDE_CONFIG_DIR` when set (a devcontainer may point it into the workspace),
+else `~/.claude`. `~/.claude/settings.json` and `~/.claude/CLAUDE.md` link into
+this repo like every other config. When `$CLAUDE_CONFIG_DIR` points elsewhere,
+activation also installs the Claude files there:
+
+- `home/.claude/settings.json` is merged into `$CLAUDE_CONFIG_DIR/settings.json`
+  (a one-time `settings.json.pre-dotfiles-<epoch>` backup is kept): each apply
+  adds only the settings keys and hook commands missing there and never changes
+  a value already there, so changing an existing value in
+  `home/.claude/settings.json` does not carry over; edit it in
+  `$CLAUDE_CONFIG_DIR/settings.json` directly. `CLAUDE.md` is linked only if
+  absent.
+- `~/.claude/settings.json` and `~/.claude/CLAUDE.md` then point into
+  `$CLAUDE_CONFIG_DIR`, so tools that edit them (hook installers) change the
+  files Claude reads.
+- Skills move one way: each entry of a real `~/.claude/skills` directory moves
+  into `$CLAUDE_CONFIG_DIR/skills` unless that name already exists there, in
+  which case it stays put with a warning. Once `~/.claude/skills` is empty it
+  becomes a link to `$CLAUDE_CONFIG_DIR/skills`, so later installs land there.
+  A skill a tool later installs through it as a relative link (as the
+  `skills` CLI does) resolves against `$CLAUDE_CONFIG_DIR/skills` and may
+  dangle; re-install it or link it by absolute path.
+
+Activation only sees the variable if the shell that runs it has it, so run
+`hm-update` / `rebuild.sh` from a shell where it is set (on macOS,
+`sudo darwin-rebuild` drops it, so the `~/.claude` fallback applies there).
+Applying later from a shell without it stops at Home Manager's collision check
+on those two `~/.claude` links; delete them, or apply from a shell that has the
+variable. The rules live in `activation/claude-config.sh`;
+`tests/claude-config.test.sh` checks them.
+
 Container usernames come from the `containerUsers` list in `flake.nix` (a
 devcontainer base image's non-root user, e.g. `node`), so nothing rewrites `user`
 at runtime. `rebuild.sh` auto-detects a container (`/.dockerenv`,
@@ -249,6 +281,7 @@ If you don't use it, just remove it from `brews` in your copy.
 - `home.nix` - user-level config: shell, packages, prompt, SSH (workstation profile), and the symlinks described below. Takes a `profile` argument (`workstation` or `container`).
 - `tools/` - the pinned upstream builds of herdr, Claude Code, and Pi (`sources.json`, and Pi's npm lock in `pi/`), plus `update.sh`, the `nix run .#update-tools` pin bumper.
 - `tests/` - behavior tests; run one with `bash tests/<name>.test.sh`.
+- `activation/claude-config.sh` - the activation steps that install the Claude Code files into `$CLAUDE_CONFIG_DIR` when it points somewhere other than `~/.claude` (see [Devcontainers](#devcontainers)).
 - `rebuild.sh` - re-applies the config after the first switch.
   Auto-detects a devcontainer and picks the container profile; otherwise uses the workstation profile. Run this every time you make a change.
 - `home/` - the actual config files that get symlinked into place; the sections below explain the shared symlink model and Pi's narrower selective setup.
@@ -258,6 +291,7 @@ If you don't use it, just remove it from `brews` in your copy.
 The files under `home/` are the real files - editing them here is editing your live config, no rebuild needed to see the change in your editor.
 `home.nix` uses `mkOutOfStoreSymlink` to point paths like `~/.config/nvim` straight at `home/.config/nvim` in this repo, so the two never drift out of sync.
 You only run `./rebuild.sh` when you change something that isn't just a symlinked file, like a package list or a system default.
+The one exception is Claude Code's settings when `CLAUDE_CONFIG_DIR` points elsewhere: re-applying adds only keys and hook commands missing from `$CLAUDE_CONFIG_DIR/settings.json`, and changes to existing values must be made in that file directly (see [Devcontainers](#devcontainers)).
 
 ## Optional Pi configuration
 

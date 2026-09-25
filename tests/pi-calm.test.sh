@@ -24,7 +24,8 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-dotfiles_test_tmproot pi-calm
+TMP_ROOT=
+dotfiles_test_tmproot TMP_ROOT pi-calm
 CALM_DIR="$ROOT/home/.pi/agent/extensions/calm"
 # The package behind the `pi` on PATH, in npm's global prefix layout
 # (<prefix>/bin/pi beside <prefix>/lib/node_modules), which the Nix build mirrors.
