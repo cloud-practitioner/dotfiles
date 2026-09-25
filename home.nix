@@ -47,10 +47,27 @@ in
 
   programs.zsh = {
     enable = true;
+    # EDITOR=nvim (above) would otherwise make zle start in vi-insert mode.
+    defaultKeymap = "emacs";
     autosuggestion.enable = true;      # ghost text from history
     syntaxHighlighting.enable = true;  # commands turn green when valid
     initContent = ''
       bindkey '^f' autosuggest-accept
+
+      # Word-wise deletion, as the pre-Nix oh-my-zsh setup had it. An empty
+      # WORDCHARS makes `-`, `/`, `.` etc. word boundaries.
+      WORDCHARS='''
+      bindkey '^H' backward-kill-word          # Ctrl+Backspace (Windows Terminal, conhost, Herdr)
+      bindkey '^[[127;5u' backward-kill-word   # Ctrl+Backspace (CSI-u / kitty keyboard terminals)
+      bindkey '^[[3;5~' kill-word              # Ctrl+Delete
+      bindkey '^[[3~' delete-char              # Delete
+      # Shift+Enter inserts a newline instead of running the line. The widget
+      # name must not start with `_`: zsh-autosuggestions skips such widgets,
+      # which would leave stale ghost text after the newline.
+      _insert-newline() { LBUFFER+=$'\n' }
+      zle -N insert-newline _insert-newline
+      bindkey '^[[27;2;13~' insert-newline     # Shift+Enter as Herdr sends it to the shell
+      bindkey '^[[13;2u' insert-newline        # Shift+Enter (CSI-u / kitty keyboard terminals)
     '' + lib.optionalString (!isWorkstation) ''
 
       # Devcontainer only. Make single-user Nix usable, including after a
