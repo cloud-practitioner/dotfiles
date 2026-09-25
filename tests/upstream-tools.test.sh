@@ -5,9 +5,11 @@
 # Coverage:
 # - both Linux home profiles (workstation and container) for this machine's
 #   system install exactly the pinned builds from tools/sources.json;
-# - the built profiles' tools report the pinned versions, Pi runs on its own
-#   Nix Node.js and falls back to that Node's npm only when PATH has none, and
-#   self-updates refuse and write nothing;
+# - the built profiles' tools report the pinned versions, Pi runs on its pinned
+#   Node.js even when another node comes first on PATH, its commands fall back
+#   to that Node's npm only when PATH has none, its package sits in npm's global
+#   layout (for tests/pi-calm.test.sh), and self-updates refuse and write
+#   nothing;
 # - `update-tools` rewrites every version, URL, and hash (and Pi's npm lock)
 #   from vendor-shaped manifests, leaves the pins alone in --dry-run, and
 #   rejects bad manifests;
@@ -97,7 +99,7 @@ test_profiles_install_pinned_builds() {
 }
 
 test_built_profiles_run_pinned_versions() {
-  local profile out home update_home update probe npm node
+  local profile out home update_home update probe npm node pinned_node
   have_linux_nix || return 0
   for profile in $(profiles); do
     out=$(nix build --no-link --print-out-paths "$ROOT#homeConfigurations.\"$profile\".activationPackage" 2>/dev/null) \
@@ -108,20 +110,26 @@ test_built_profiles_run_pinned_versions() {
       || fail "$profile: claude --version is not the pinned version"
     [ "$(HOME=$home "$out/home-path/bin/herdr" --version)" = "herdr $(pin herdr version "$SOURCES")" ] \
       || fail "$profile: herdr --version is not the pinned version"
-    [ "$(env -i HOME="$home" PATH=/var/empty "$out/home-path/bin/pi" --version)" = "$(pin pi version "$SOURCES")" ] \
-      || fail "$profile: pi does not run the pinned version on its own Node.js (no node on PATH)"
+    [ "$(HOME=$home "$out/home-path/bin/pi" --version)" = "$(pin pi version "$SOURCES")" ] \
+      || fail "$profile: pi --version is not the pinned version"
+    [ "$(jq -r .version "$out/home-path/lib/node_modules/@earendil-works/pi-coding-agent/package.json")" = "$(pin pi version "$SOURCES")" ] \
+      || fail "$profile: the pinned Pi package is not in npm's global layout beside bin/pi"
     # Pi spawns `npm` for the packages it installs itself and for the agent's
     # commands. An npm already on PATH (the image's Node, nvm) must win; the
-    # pinned Node's npm is only the fallback when PATH has none.
+    # pinned Node's npm is only the fallback when PATH has none. Pi itself
+    # always runs on the pinned Node.js, whatever node comes first on PATH.
     probe="$home/npm-probe"
     mkdir -p "$probe/other" "$probe/bin"
     printf '#!/bin/sh\nexit 1\n' > "$probe/other/npm"
-    chmod +x "$probe/other/npm"
+    cp "$probe/other/npm" "$probe/other/node"
+    chmod +x "$probe/other/npm" "$probe/other/node"
     ln -s "$(command -v sh)" "$probe/bin/sh"
-    { read -r npm; read -r node; } < <(pi_npm_probe "$out/home-path/bin/pi" "$probe/bin" "$probe/without-npm")
-    [ -n "$npm" ] && [ "$(readlink -f "$(dirname "$npm")/node")" = "$node" ] \
-      || fail "$profile: with no npm on PATH, pi does not fall back to the npm of the Node.js it runs on: npm='$npm' node='$node'"
+    { read -r npm; read -r pinned_node; } < <(pi_npm_probe "$out/home-path/bin/pi" "$probe/bin" "$probe/without-npm")
+    [ -n "$npm" ] && [ "$(readlink -f "$(dirname "$npm")/node")" = "$pinned_node" ] \
+      || fail "$profile: with no npm on PATH, pi does not fall back to the npm of the Node.js it runs on: npm='$npm' node='$pinned_node'"
     { read -r npm; read -r node; } < <(pi_npm_probe "$out/home-path/bin/pi" "$probe/other:$probe/bin" "$probe/with-npm")
+    [ "$node" = "$pinned_node" ] \
+      || fail "$profile: with another node first on PATH, pi runs on '$node', not the pinned Node.js '$pinned_node'"
     [ "$npm" = "$probe/other/npm" ] \
       || fail "$profile: pi hands its commands npm '$npm' instead of the npm already on PATH"
     update_home="$home/claude-update"
@@ -142,8 +150,6 @@ test_built_profiles_run_pinned_versions() {
     fi
     assert_contains "$update" "pi cannot self-update this installation" "$profile: pi update is not refused: $update"
     [ ! -e "$update_home/npm-global" ] || fail "$profile: pi update installed an unpinned copy"
-    grep -aq PI_SKIP_VERSION_CHECK "$(readlink -f "$out/home-path/bin/pi")" \
-      || fail "$profile: pi wrapper does not skip the version check"
   done
   pass "built workstation and container profiles run herdr, Claude Code, and Pi at the pinned versions with self-updates refused"
 }

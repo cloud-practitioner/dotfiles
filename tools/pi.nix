@@ -29,12 +29,17 @@ stdenvNoCC.mkDerivation {
   # precedence for everything Pi runs, and the npm packages Pi installs itself
   # still find an npm where none is installed. `pi update` refuses to replace a
   # read-only install no package manager owns, and skipping the version check
-  # keeps Pi from nagging about the pin.
+  # keeps Pi from nagging about the pin. The package also sits in npm's global
+  # prefix layout (lib/node_modules beside bin/pi), where tools such as
+  # tests/pi-calm.test.sh look for it.
   installPhase = ''
     runHook preInstall
     makeBinaryWrapper "${nodeModules}/node_modules/.bin/pi" "$out/bin/pi" \
       --suffix PATH : "${lib.makeBinPath [ nodejs ]}" \
       --set PI_SKIP_VERSION_CHECK 1
+    mkdir -p "$out/lib/node_modules/@earendil-works"
+    ln -s "${nodeModules}/node_modules/@earendil-works/pi-coding-agent" \
+      "$out/lib/node_modules/@earendil-works/pi-coding-agent"
     runHook postInstall
   '';
 

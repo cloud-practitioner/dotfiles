@@ -26,7 +26,10 @@ set -u
 
 dotfiles_test_tmproot pi-calm
 CALM_DIR="$ROOT/home/.pi/agent/extensions/calm"
-PI_PACKAGE_DIR=${PI_CALM_TEST_PACKAGE_DIR:-"$(npm root -g 2>/dev/null)/@earendil-works/pi-coding-agent"}
+# The package behind the `pi` on PATH, in npm's global prefix layout
+# (<prefix>/bin/pi beside <prefix>/lib/node_modules), which the Nix build mirrors.
+PI_BIN=$(command -v pi 2>/dev/null || true)
+PI_PACKAGE_DIR=${PI_CALM_TEST_PACKAGE_DIR:-"${PI_BIN%/bin/pi}/lib/node_modules/@earendil-works/pi-coding-agent"}
 TMUX_SOCKET="pi-calm-test-$$"
 TMUX_SESSION="pi-calm-e2e"
 
@@ -78,10 +81,11 @@ find_chrome() {
 }
 
 # Link Pi's own copy of dependency $1 into fixture $2, found the way Node
-# resolves it from Pi's package: nested under it (npm install -g) or hoisted
-# beside it (the pi.dev installer and the Nix build).
+# resolves it from Pi's real package directory: nested under it (npm install
+# -g) or hoisted beside it (the pi.dev installer and the Nix build).
 link_pi_dependency() {
-  local dep=$1 fixture=$2 dir=$PI_PACKAGE_DIR
+  local dep=$1 fixture=$2 dir
+  dir=$(cd "$PI_PACKAGE_DIR" && pwd -P)
   while [ "$dir" != / ]; do
     if [ -d "$dir/node_modules/$dep" ]; then
       mkdir -p "$(dirname "$fixture/node_modules/$dep")"
