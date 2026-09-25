@@ -198,7 +198,7 @@ copy_pins() {
 
 # Fail with $1 unless the pins in $2 still match the committed ones.
 assert_pins_unchanged() {
-  cmp -s "$SOURCES" "$2/sources.json" && diff -r "$ROOT/tools/pi" "$2/pi" >/dev/null || fail "$1"
+  { cmp -s "$SOURCES" "$2/sources.json" && diff -r "$ROOT/tools/pi" "$2/pi" >/dev/null; } || fail "$1"
 }
 
 run_update_tools() {
