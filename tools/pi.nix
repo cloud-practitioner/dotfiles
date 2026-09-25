@@ -24,12 +24,15 @@ stdenvNoCC.mkDerivation {
 
   nativeBuildInputs = [ makeBinaryWrapper ];
 
-  # npm links bin/pi with a shebang patched to the nixpkgs Node.js. `pi update`
-  # refuses to replace a read-only install no package manager owns, and
-  # skipping the version check keeps Pi from nagging about the pin.
+  # npm links bin/pi with a shebang patched to the nixpkgs Node.js, and that
+  # Node's bin (with its npm) goes first on PATH, so the npm packages Pi
+  # installs itself always use the pinned npm. `pi update` refuses to replace a
+  # read-only install no package manager owns, and skipping the version check
+  # keeps Pi from nagging about the pin.
   installPhase = ''
     runHook preInstall
     makeBinaryWrapper "${nodeModules}/node_modules/.bin/pi" "$out/bin/pi" \
+      --prefix PATH : "${lib.makeBinPath [ nodejs ]}" \
       --set PI_SKIP_VERSION_CHECK 1
     runHook postInstall
   '';
