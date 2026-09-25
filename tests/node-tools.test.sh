@@ -22,10 +22,12 @@
 #   container activation keeps the user's PATH for the image's pnpm;
 # - the workstation's interactive zsh puts nvm's node, npm, and pnpm first on
 #   PATH; in both profiles every zsh (interactive or not) and a bash login
-#   shell find pnpm's global bin (claude, pi, copilot) right after
-#   ~/.nix-profile/bin (herdr), once and ahead of system and Windows-interop
-#   copies, and on the workstation also nvm's default Node.js bin
-#   ($NVM_DIR/default/bin); the container never puts nvm on PATH.
+#   shell, fresh or started from an environment that already marks the
+#   session variables sourced without PNPM_HOME or NVM_DIR, find pnpm's global
+#   bin (claude, pi, copilot) right after ~/.nix-profile/bin (herdr), once and
+#   ahead of system and Windows-interop copies, with no empty PATH entry, and
+#   on the workstation also nvm's default Node.js bin ($NVM_DIR/default/bin);
+#   the container never puts nvm on PATH.
 set -u
 
 # shellcheck source=tests/lib.sh
