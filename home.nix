@@ -97,6 +97,19 @@ in
         export HM_WELCOME_SHOWN=1
         print -P "%F{blue}dotfiles%f $(git -C "$HOME/.dotfiles" rev-parse --short HEAD 2>/dev/null) - run %F{green}hm-update%f to pull latest and re-switch"
       fi
+    '' + lib.optionalString isWorkstation ''
+
+      # The systemd ssh-agent starts empty; when it is reachable but has no
+      # identities (exit 1), load the keys so `ssh-add -l` is populated before
+      # launching devcontainers. Skips when keys are present (0) or no agent (2).
+      if [[ -o interactive ]]; then
+        ssh-add -l >/dev/null 2>&1
+        if [ "$?" = 1 ]; then
+          ssh-add ~/.ssh/id_ed25519_gh_work \
+                  ~/.ssh/id_ed25519_gh_personal \
+                  ~/.ssh/id_ed25519_bb_work 2>/dev/null
+        fi
+      fi
     '';
     shellAliases = {
       ".." = "cd ..";
@@ -111,9 +124,10 @@ in
 
   # SSH client config lives in the repo so a throwaway WSL2 instance comes up
   # with the same host aliases every time. The private keys themselves are not
-  # managed by Nix - drop them into ~/.ssh out of band. Workstation-only: a
-  # devcontainer has no keys and no systemd, and borrows the host's forwarded
-  # agent with plain github.com URLs instead.
+  # managed by Nix - drop them into ~/.ssh out of band. Workstation-only: the
+  # devcontainer reuses these keys and aliases via a read-only ~/.ssh bind mount
+  # plus the proxied WSL2 ssh-agent socket (see .devcontainer/devcontainer.json
+  # and Dockerfile), working under both VS Code and the devcontainer CLI.
   programs.ssh = lib.mkIf isWorkstation {
     enable = true;
     matchBlocks = {
