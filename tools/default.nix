@@ -1,8 +1,8 @@
-# herdr, Claude Code, and Pi, built from each vendor's own release downloads -
-# the artifacts their curl installers fetch - instead of nixpkgs builds, so the
-# workstation and the devcontainer run the same pinned binaries.
-# sources.json holds the pins (version, URL, and the vendor-published SHA-256);
-# bump them all with `nix run .#update-tools` (update.sh).
+# herdr, Claude Code, and Pi as each vendor's curl installer installs them,
+# instead of nixpkgs builds, so every Linux home profile gets the same pinned
+# versions. sources.json holds the pins (version, and for the binaries the URL
+# and vendor-published SHA-256; Pi's npm lock is in pi/); bump them all with
+# `nix run .#update-tools` (update.sh).
 { lib, callPackage }:
 
 let

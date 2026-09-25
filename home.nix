@@ -33,8 +33,8 @@ in
   ] ++ lib.optionals stdenv.isLinux [
     # Linux equivalents of the macOS Homebrew casks/brews in configuration.nix.
     wezterm
-    # Vendor release builds pinned in tools/sources.json (flake.nix overlay),
-    # so the workstation and the devcontainer run identical versions.
+    # Vendor releases pinned in tools/ (flake.nix overlay), the same in both
+    # Linux profiles.
     upstream-tools.herdr
     upstream-tools.claude-code
     upstream-tools.pi

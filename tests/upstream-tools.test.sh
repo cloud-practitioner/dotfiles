@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # Behavior checks for the pinned upstream CLI tools (tools/): herdr, Claude
-# Code, and Pi from each vendor's release downloads.
+# Code, and Pi as each vendor's curl installer installs them.
 #
 # Coverage:
 # - both Linux home profiles (workstation and container) for this machine's
 #   system install exactly the pinned builds from tools/sources.json;
-# - the built profiles' tools report the pinned versions, and their
-#   self-updaters are off (`claude update` refuses and writes nothing);
-# - `update-tools` rewrites every version, URL, and hash from vendor-shaped
-#   manifests, leaves the pins alone in --dry-run, and rejects bad manifests;
+# - the built profiles' tools report the pinned versions, Pi runs on its own
+#   Nix Node.js, and self-updates refuse and write nothing;
+# - `update-tools` rewrites every version, URL, and hash (and Pi's npm lock)
+#   from vendor-shaped manifests, leaves the pins alone in --dry-run, and
+#   rejects bad manifests;
 # - the `nix run .#update-tools` flake app builds (shellcheck included).
 #
 # Nix evaluates the flake from Git, so new files must be tracked (`git add`).
@@ -63,6 +64,8 @@ test_profiles_install_pinned_builds() {
         || fail "$profile: expected exactly one $tool package, got $matches"
       [ "$(jq -r '.[0].version' <<<"$matches")" = "$(pin "$tool" version "$SOURCES")" ] \
         || fail "$profile: $tool is not at the pinned version: $matches"
+      # Pi pins its npm lock (tools/pi/), not a per-platform download.
+      [ "$tool" = pi ] && continue
       [ "$(jq -r '.[0].url' <<<"$matches")" = "$(pin_platform "$tool" "$SYSTEM" url "$SOURCES")" ] \
         || fail "$profile: $tool does not fetch the pinned upstream URL: $matches"
       [ "$(jq -r '.[0].hash' <<<"$matches")" = "$(pin_platform "$tool" "$SYSTEM" sha256 "$SOURCES")" ] \
@@ -70,7 +73,7 @@ test_profiles_install_pinned_builds() {
     done
     assert_not_contains "$packages" '"pi-coding-agent"' "$profile: still installs nixpkgs pi-coding-agent"
   done
-  pass "workstation and container profiles install herdr, Claude Code, and Pi from the pinned upstream downloads"
+  pass "workstation and container profiles install herdr, Claude Code, and Pi from the pinned upstream releases"
 }
 
 test_built_profiles_run_pinned_versions() {
@@ -85,8 +88,8 @@ test_built_profiles_run_pinned_versions() {
       || fail "$profile: claude --version is not the pinned version"
     [ "$(HOME=$home "$out/home-path/bin/herdr" --version)" = "herdr $(pin herdr version "$SOURCES")" ] \
       || fail "$profile: herdr --version is not the pinned version"
-    [ "$(HOME=$home "$out/home-path/bin/pi" --version)" = "$(pin pi version "$SOURCES")" ] \
-      || fail "$profile: pi --version is not the pinned version"
+    [ "$(env -i HOME="$home" PATH=/var/empty "$out/home-path/bin/pi" --version)" = "$(pin pi version "$SOURCES")" ] \
+      || fail "$profile: pi does not run the pinned version on its own Node.js (no node on PATH)"
     update_home="$home/claude-update"
     mkdir -p "$update_home"
     update=$(HOME=$update_home CLAUDE_CONFIG_DIR="$update_home/.claude" "$out/home-path/bin/claude" update </dev/null 2>&1)
@@ -96,18 +99,27 @@ test_built_profiles_run_pinned_versions() {
     assert_contains "$update" "self-update is disabled for Nix installs" "$profile: herdr update is not refused: $update"
     [ "$(HOME=$home HERDR_CONFIG_PATH="$ROOT/home/.config/herdr/config.toml" "$out/home-path/bin/herdr" config check)" = "config: ok" ] \
       || fail "$profile: herdr rejects home/.config/herdr/config.toml"
+    update_home="$home/pi-update"
+    mkdir -p "$update_home"
+    # --force skips the up-to-date shortcut; a sandboxed npm prefix catches a stray global install.
+    if update=$(HOME=$update_home npm_config_prefix="$update_home/npm-global" \
+      "$out/home-path/bin/pi" update --self --force </dev/null 2>&1); then
+      fail "$profile: pi update succeeded: $update"
+    fi
+    assert_contains "$update" "pi cannot self-update this installation" "$profile: pi update is not refused: $update"
+    [ ! -e "$update_home/npm-global" ] || fail "$profile: pi update installed an unpinned copy"
     grep -aq PI_SKIP_VERSION_CHECK "$(readlink -f "$out/home-path/bin/pi")" \
       || fail "$profile: pi wrapper does not skip the version check"
   done
-  grep -Eq '^version_check = false$' "$ROOT/home/.config/herdr/config.toml" \
-    || fail "herdr config does not disable the background version check"
-  pass "built workstation and container profiles run herdr, Claude Code, and Pi at the pinned versions with self-updates off"
+  pass "built workstation and container profiles run herdr, Claude Code, and Pi at the pinned versions with self-updates refused"
 }
 
 # Write vendor-shaped release manifests under $1 for claude $2, herdr $3, pi $4.
+# The Pi lock leaves out its own package's hash, which the release metadata lists.
 write_fixtures() {
-  local dir=$1 claude=$2 herdr=$3 pi=$4
-  mkdir -p "$dir/claude/$claude" "$dir/pi-api" "$dir/pi-releases/v$pi"
+  local dir=$1 claude=$2 herdr=$3 pi=$4 pi_tarball
+  pi_tarball="https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-$pi.tgz"
+  mkdir -p "$dir/claude/$claude" "$dir/pi-api/$pi"
   printf '%s\n' "$claude" > "$dir/claude/latest"
   jq -n --arg v "$claude" '{version: $v, platforms: {
       "linux-x64": {binary: "claude", checksum: ("a" * 64), size: 1},
@@ -120,12 +132,33 @@ write_fixtures() {
         "linux-aarch64": "https://github.com/herdrdev/herdr/releases/download/v\($v)/herdr-linux-aarch64"},
       sha256: {"linux-x86_64": ("D" * 64), "linux-aarch64": ("e" * 64)}}' \
     > "$dir/herdr-latest.json"
-  jq -n --arg v "$pi" '{schemaVersion: 1, version: $v}' > "$dir/pi-api/latest"
-  printf '%s  %s\n' \
-    "$(printf 'f%.0s' {1..64})" pi-linux-x64.tar.gz \
-    "$(printf '1%.0s' {1..64})" pi-linux-arm64.tar.gz \
-    "$(printf '2%.0s' {1..64})" pi-darwin-arm64.tar.gz \
-    > "$dir/pi-releases/v$pi/SHA256SUMS"
+  jq -n --arg v "$pi" --arg t "$pi_tarball" '{schemaVersion: 1, version: $v, packages: [
+      {name: "@earendil-works/pi-coding-agent", version: $v, tarball: $t, integrity: "sha512-pi-fixture"}]}' \
+    > "$dir/pi-api/latest"
+  jq -n --arg v "$pi" '{name: "@earendil-works/pi-coding-agent-install", version: $v, private: true,
+      dependencies: {"@earendil-works/pi-coding-agent": $v}}' \
+    > "$dir/pi-api/$pi/package.json"
+  jq -n --arg v "$pi" --arg t "$pi_tarball" '{name: "@earendil-works/pi-coding-agent-install", version: $v,
+      lockfileVersion: 3, requires: true, packages: {
+        "": {name: "@earendil-works/pi-coding-agent-install", version: $v,
+          dependencies: {"@earendil-works/pi-coding-agent": $v}},
+        "node_modules/@earendil-works/pi-coding-agent": {version: $v, resolved: $t,
+          dependencies: {chalk: "6.0.0"}, bin: {pi: "dist/bundle/cli.js"}},
+        "node_modules/chalk": {version: "6.0.0",
+          resolved: "https://registry.npmjs.org/chalk/-/chalk-6.0.0.tgz", integrity: "sha512-chalk-fixture"}}}' \
+    > "$dir/pi-api/$pi/package-lock.json"
+}
+
+# Copy the committed pins (sources.json and Pi's lock) to $1.
+copy_pins() {
+  mkdir -p "$1"
+  cp "$SOURCES" "$1/sources.json"
+  cp -R "$ROOT/tools/pi" "$1/pi"
+}
+
+# Fail with $1 unless the pins in $2 still match the committed ones.
+assert_pins_unchanged() {
+  cmp -s "$SOURCES" "$2/sources.json" && diff -r "$ROOT/tools/pi" "$2/pi" >/dev/null || fail "$1"
 }
 
 run_update_tools() {
@@ -134,29 +167,29 @@ run_update_tools() {
   CLAUDE_RELEASES_URL="file://$dir/claude" \
     HERDR_MANIFEST_URL="file://$dir/herdr-latest.json" \
     PI_INSTALLER_API_URL="file://$dir/pi-api" \
-    PI_RELEASES_URL="file://$dir/pi-releases" \
     UPDATE_TOOLS_SOURCES="$sources" \
     bash "$ROOT/tools/update.sh" "$@" 2>&1
 }
 
 test_update_tools_rewrites_pins() {
-  local dir="$TMP_ROOT/update" sources out
+  local dir="$TMP_ROOT/update" pins sources out pi_key=node_modules/@earendil-works/pi-coding-agent
   if ! command -v curl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
     echo "skip: update-tools needs curl and jq"
     return 0
   fi
-  sources="$dir/sources.json"
+  pins="$dir/pins"
+  sources="$pins/sources.json"
   write_fixtures "$dir" 9.8.7 9.9.9 9.10.11
-  mkdir -p "$dir" && cp "$SOURCES" "$sources"
+  copy_pins "$pins"
 
   out=$(run_update_tools "$dir" "$sources" --dry-run) || fail "dry run failed: $out"
   assert_contains "$out" "claude-code  $(pin claude-code version "$SOURCES") -> 9.8.7" "dry run does not report the Claude Code bump: $out"
   assert_contains "$out" "pi           $(pin pi version "$SOURCES") -> 9.10.11" "dry run does not report the Pi bump: $out"
-  assert_contains "$out" "Dry run: $sources left unchanged" "dry run does not say it wrote nothing: $out"
-  cmp -s "$SOURCES" "$sources" || fail "dry run modified the pins file"
+  assert_contains "$out" "Dry run: $sources and $pins/pi left unchanged" "dry run does not say it wrote nothing: $out"
+  assert_pins_unchanged "dry run modified the pins" "$pins"
 
   out=$(run_update_tools "$dir" "$sources") || fail "update failed: $out"
-  assert_contains "$out" "Updated $sources" "update does not report the rewrite: $out"
+  assert_contains "$out" "Updated $sources and $pins/pi" "update does not report the rewrite: $out"
   [ "$(pin claude-code version "$sources")" = 9.8.7 ] || fail "Claude Code version not bumped"
   [ "$(pin_platform claude-code x86_64-linux url "$sources")" = "file://$dir/claude/9.8.7/linux-x64/claude" ] \
     || fail "Claude Code URL does not follow install.sh's layout"
@@ -170,27 +203,32 @@ test_update_tools_rewrites_pins() {
   [ "$(pin_platform herdr x86_64-linux sha256 "$sources")" = "$(printf 'd%.0s' {1..64})" ] \
     || fail "herdr hash is not the lower-cased manifest checksum"
   [ "$(pin pi version "$sources")" = 9.10.11 ] || fail "Pi version not bumped"
-  [ "$(pin_platform pi aarch64-linux url "$sources")" = "file://$dir/pi-releases/v9.10.11/pi-linux-arm64.tar.gz" ] \
-    || fail "Pi URL is not the release asset"
-  [ "$(pin_platform pi x86_64-linux sha256 "$sources")" = "$(printf 'f%.0s' {1..64})" ] \
-    || fail "Pi hash is not the SHA256SUMS entry"
-  [ "$(jq -c '[.[].platforms | keys] | unique' "$sources")" = '[["aarch64-linux","x86_64-linux"]]' ] \
+  [ "$(pin pi checksums "$sources")" = "file://$dir/pi-api/9.10.11/package-lock.json" ] \
+    || fail "Pi pin does not record its lock source"
+  cmp -s "$dir/pi-api/9.10.11/package.json" "$pins/pi/package.json" \
+    || fail "Pi package.json is not the installer's"
+  [ "$(jq -r --arg k "$pi_key" '.packages[$k].integrity' "$pins/pi/package-lock.json")" = sha512-pi-fixture ] \
+    || fail "Pi lock does not pin Pi's own package by the release metadata's hash"
+  [ "$(jq -S --arg k "$pi_key" 'del(.packages[$k].integrity)' "$pins/pi/package-lock.json")" = "$(jq -S . "$dir/pi-api/9.10.11/package-lock.json")" ] \
+    || fail "Pi lock differs from the installer's beyond the added hash"
+  [ "$(jq -c '[.[] | .platforms // empty | keys] | unique' "$sources")" = '[["aarch64-linux","x86_64-linux"]]' ] \
     || fail "pins cover other systems than the Linux profiles"
 
   out=$(run_update_tools "$dir" "$sources") || fail "idempotent rerun failed: $out"
   assert_contains "$out" "All pins are already current." "rerun does not report current pins: $out"
-  pass "update-tools rewrites every version, URL, and hash from the vendor manifests and leaves pins alone in --dry-run"
+  pass "update-tools rewrites every version, URL, and hash and Pi's lock from the vendor manifests, and leaves pins alone in --dry-run"
 }
 
 test_update_tools_rejects_bad_manifests() {
-  local dir="$TMP_ROOT/bad" sources out
+  local dir="$TMP_ROOT/bad" pins sources out
   if ! command -v curl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
     echo "skip: update-tools needs curl and jq"
     return 0
   fi
-  sources="$dir/sources.json"
+  pins="$dir/pins"
+  sources="$pins/sources.json"
   write_fixtures "$dir" 9.8.7 9.9.9 9.10.11
-  cp "$SOURCES" "$sources"
+  copy_pins "$pins"
 
   jq '.platforms["linux-arm64"].checksum = "not-a-hash"' "$dir/claude/9.8.7/manifest.json" > "$dir/m" \
     && mv "$dir/m" "$dir/claude/9.8.7/manifest.json"
@@ -198,15 +236,24 @@ test_update_tools_rejects_bad_manifests() {
     fail "update-tools accepted a malformed checksum: $out"
   fi
   assert_contains "$out" "claude-code linux-arm64: missing or malformed SHA-256" "malformed checksum error is unclear: $out"
-  cmp -s "$SOURCES" "$sources" || fail "a rejected update modified the pins file"
+  assert_pins_unchanged "a rejected update modified the pins" "$pins"
 
   write_fixtures "$dir" 9.8.7 9.9.9 9.10.11
-  sed -i '/pi-linux-x64/d' "$dir/pi-releases/v9.10.11/SHA256SUMS"
+  jq 'del(.packages)' "$dir/pi-api/latest" > "$dir/m" && mv "$dir/m" "$dir/pi-api/latest"
   if out=$(run_update_tools "$dir" "$sources"); then
-    fail "update-tools accepted a release without a Linux x64 checksum: $out"
+    fail "update-tools accepted a Pi lock with an unhashed package: $out"
   fi
-  assert_contains "$out" "pi pi-linux-x64.tar.gz: missing or malformed SHA-256" "missing asset error is unclear: $out"
-  cmp -s "$SOURCES" "$sources" || fail "a rejected update modified the pins file"
+  assert_contains "$out" "pi: no published hash for node_modules/@earendil-works/pi-coding-agent" "unhashed package error is unclear: $out"
+  assert_pins_unchanged "a rejected update modified the pins" "$pins"
+
+  write_fixtures "$dir" 9.8.7 9.9.9 9.10.11
+  jq '.packages["node_modules/@earendil-works/pi-coding-agent"].version = "9.10.10"' \
+    "$dir/pi-api/9.10.11/package-lock.json" > "$dir/m" && mv "$dir/m" "$dir/pi-api/9.10.11/package-lock.json"
+  if out=$(run_update_tools "$dir" "$sources"); then
+    fail "update-tools accepted a Pi lock for another version: $out"
+  fi
+  assert_contains "$out" "pi: file://$dir/pi-api/9.10.11/package-lock.json does not lock @earendil-works/pi-coding-agent@9.10.11" "wrong-version lock error is unclear: $out"
+  assert_pins_unchanged "a rejected update modified the pins" "$pins"
 
   rm "$dir/pi-api/latest"
   if out=$(run_update_tools "$dir" "$sources"); then

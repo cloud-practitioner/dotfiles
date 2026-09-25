@@ -31,23 +31,20 @@
 
       linuxSystems = [ "x86_64-linux" "aarch64-linux" ];
 
-      # Linux nixpkgs. allowUnfree is set here because it lives in
-      # configuration.nix, which Linux never loads. The overlay adds
-      # `upstream-tools`: herdr, Claude Code, and Pi built from each vendor's
-      # pinned release download (tools/), identical in every Linux profile.
-      linuxPkgs = system: import nixpkgs {
-        inherit system;
-        config.allowUnfree = true;
-        overlays = [ (final: _prev: { upstream-tools = final.callPackage ./tools { }; }) ];
-      };
-
       # Standalone home-manager for Linux. nix-darwin is macOS-only, so on Linux
-      # we apply just the user-level config (home.nix) instead. `profile`
-      # selects between a full workstation and a devcontainer that reuses the
-      # same shell/tools but no host SSH machinery.
+      # we apply just the user-level config (home.nix) instead. allowUnfree is
+      # set here because it lives in configuration.nix, which Linux never loads.
+      # The overlay adds `upstream-tools`: herdr, Claude Code, and Pi built from
+      # each vendor's pinned release (tools/), the same in every Linux profile.
+      # `profile` selects between a full workstation and a devcontainer that
+      # reuses the same shell/tools but no host SSH machinery.
       mkLinuxHome = { system, user, profile ? "workstation" }:
         home-manager.lib.homeManagerConfiguration {
-          pkgs = linuxPkgs system;
+          pkgs = import nixpkgs {
+            inherit system;
+            config.allowUnfree = true;
+            overlays = [ (final: _prev: { upstream-tools = final.callPackage ./tools { }; }) ];
+          };
           extraSpecialArgs = { inherit user profile; };
           modules = [ ./home.nix ];
         };
@@ -90,19 +87,14 @@
       # cloud-practitioner/agentic-devcontainer) select one by `id -un` + arch.
       homeConfigurations = workstationConfigs // containerConfigs;
 
-      # The pinned upstream tools, buildable on their own (`nix build .#pi`).
-      packages = lib.genAttrs linuxSystems (system: {
-        inherit ((linuxPkgs system).upstream-tools) claude-code herdr pi;
-      });
-
       # `nix run .#update-tools [-- --dry-run]` bumps every pin in
-      # tools/sources.json to the vendors' latest releases.
+      # tools/sources.json and tools/pi/ to the vendors' latest releases.
       apps = lib.genAttrs linuxSystems (system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
           update-tools = pkgs.writeShellApplication {
             name = "update-tools";
-            runtimeInputs = with pkgs; [ coreutils curl gawk jq ];
+            runtimeInputs = with pkgs; [ coreutils curl diffutils jq ];
             text = builtins.readFile ./tools/update.sh;
           };
         in

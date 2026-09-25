@@ -110,7 +110,7 @@ What you get on Linux:
 
 - Nix user packages: ripgrep, fd, fzf, jq, lazygit, Neovim, Hack Nerd Font.
 - WezTerm from nixpkgs, the Linux equivalent of its macOS cask.
-- herdr, Claude Code, and Pi from each vendor's pinned release download, identical on the workstation and in devcontainers - see [Upstream CLI tools](#upstream-cli-tools).
+- herdr, Claude Code, and Pi pinned to what each vendor's own installer installs, the same in both Linux profiles - see [Upstream CLI tools](#upstream-cli-tools).
 - The same symlinked shell (zsh + starship), Neovim, WezTerm, and agent configs as macOS.
 - SSH client config (per-host aliases) and an `ssh-agent` systemd user service, on the workstation profile - see [SSH](#ssh-workstation-profile).
 - A `container` profile that reuses the same shell and tools inside a devcontainer - see [Devcontainers](#devcontainers).
@@ -125,22 +125,24 @@ Notes:
 
 ### Upstream CLI tools
 
-herdr, Claude Code, and Pi are not nixpkgs builds. Each is a Nix package (`tools/`) that downloads the same release artifact the vendor's `curl ... | sh` installer would, pinned by version and SHA-256 in `tools/sources.json`:
+herdr, Claude Code, and Pi are not nixpkgs builds. Each is a Nix package (`tools/`) that installs what the vendor's `curl ... | sh` installer would, pinned by version in `tools/sources.json` and by hash:
 
-| Tool | Installer it mirrors | Artifact | Pinned hash comes from |
+| Tool | Installer it mirrors | What gets installed | Pinned hashes come from |
 | --- | --- | --- | --- |
 | Claude Code | `https://claude.ai/install.sh` | native binary from `downloads.claude.ai/claude-code-releases` | that release's `manifest.json` |
 | herdr | `https://herdr.dev/install.sh` | static binary from the GitHub release | `https://herdr.dev/latest.json` |
-| Pi | `https://pi.dev/install.sh` | standalone build (`pi-linux-*.tar.gz`) from the GitHub release | that release's `SHA256SUMS` |
+| Pi | `https://pi.dev/install.sh` | the npm package `@earendil-works/pi-coding-agent` and its dependencies, from the release's `package-lock.json` (`tools/pi/`), run on the nixpkgs Node.js | that lock, plus the installer API's release metadata for Pi's own packages |
 
-Both Linux profiles (workstation and container) install the same pins, so the workstation and every devcontainer run identical versions.
-The pin is the only way these tools change: Claude Code's auto-updater and `claude update` are disabled, Pi skips its version check (and `pi update` can't replace a standalone build), and herdr refuses `herdr update` for Nix installs while `home/.config/herdr/config.toml` turns off its background version check.
+Both Linux profiles (workstation and container) install the same pins.
+A devcontainer matches the workstation only once the devcontainer repo stops installing its own copies in the image, which a separate follow-up change there does.
+Until then its Dockerfile installs Claude Code with `curl -fsSL https://claude.ai/install.sh | bash` (a self-updating `~/.local/bin/claude` that comes before the Nix one on `PATH`) and Pi with `pnpm add -g --ignore-scripts @earendil-works/pi-coding-agent@latest`.
+The pin is the only way the Nix-installed tools change: Claude Code's auto-updater and `claude update` are disabled, Pi skips its version check and `pi update` refuses to replace the read-only install, and herdr refuses `herdr update` for Nix installs (its version check still tells you when a release is out).
 
 To move all three to the latest upstream releases:
 
 ```sh
 nix run .#update-tools -- --dry-run   # show the new versions and pins, change nothing
-nix run .#update-tools                # rewrite tools/sources.json
+nix run .#update-tools                # rewrite tools/sources.json and tools/pi/
 ```
 
 Commit and push the result, then apply it the same way in each environment:
@@ -148,7 +150,7 @@ Commit and push the result, then apply it the same way in each environment:
 - **WSL2 workstation**: `./rebuild.sh` from the repo.
 - **Devcontainer**: `hm-update` (pulls `~/.dotfiles` and re-switches the container profile).
 
-To check without applying, `nix build .#claude-code .#herdr .#pi` builds just the tools, and `bash tests/upstream-tools.test.sh` checks that both profiles install the pinned versions and that the updater behaves.
+To check without applying, `bash tests/upstream-tools.test.sh` checks that both profiles install the pinned versions and that the updater behaves.
 
 ### SSH (workstation profile)
 
@@ -245,7 +247,7 @@ If you don't use it, just remove it from `brews` in your copy.
   Wires up nixpkgs, nix-darwin, home-manager, and nix-homebrew, declares the `mac` machine, and generates the Linux home-manager configs (workstation + `container` profiles for each user in `containerUsers`).
 - `configuration.nix` - system-level config: macOS defaults, Homebrew.
 - `home.nix` - user-level config: shell, packages, prompt, SSH (workstation profile), and the symlinks described below. Takes a `profile` argument (`workstation` or `container`).
-- `tools/` - the pinned upstream builds of herdr, Claude Code, and Pi (`sources.json`), plus `update.sh`, the `nix run .#update-tools` pin bumper.
+- `tools/` - the pinned upstream builds of herdr, Claude Code, and Pi (`sources.json`, and Pi's npm lock in `pi/`), plus `update.sh`, the `nix run .#update-tools` pin bumper.
 - `tests/` - behavior tests; run one with `bash tests/<name>.test.sh`.
 - `rebuild.sh` - re-applies the config after the first switch.
   Auto-detects a devcontainer and picks the container profile; otherwise uses the workstation profile. Run this every time you make a change.
@@ -259,7 +261,7 @@ You only run `./rebuild.sh` when you change something that isn't just a symlinke
 
 ## Optional Pi configuration
 
-On Linux, both home profiles install Pi from its pinned standalone release (see [Upstream CLI tools](#upstream-cli-tools)). On macOS, Pi is opt-in: install it from its owner with the [official Pi instructions](https://pi.dev), for example:
+On Linux, both home profiles install Pi from its pinned npm release (see [Upstream CLI tools](#upstream-cli-tools)). On macOS, Pi is opt-in: install it from its owner with the [official Pi instructions](https://pi.dev), for example:
 
 ```sh
 npm install -g --ignore-scripts @earendil-works/pi-coding-agent

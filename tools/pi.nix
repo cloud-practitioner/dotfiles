@@ -1,36 +1,35 @@
-# Pi's standalone release build. https://pi.dev/install.sh installs the
-# release its installer API reports as latest; that same GitHub release
-# publishes a self-contained binary per platform and a SHA256SUMS file, and the
-# pin's sha256 is that file's entry (recorded as `checksums` in sources.json).
-{ lib, stdenvNoCC, fetchurl, autoPatchelfHook, makeBinaryWrapper, libxcb, source }:
+# Pi's npm release, as installed by https://pi.dev/install.sh. The installer
+# takes the release's package.json and package-lock.json from pi.dev's
+# installer API and runs `npm ci --ignore-scripts` on them. tools/pi/ holds
+# those two files, written by update.sh, which adds the hashes of Pi's own
+# packages that the lock leaves out. The lock's integrity hashes then pin every
+# package, so Nix installs the same dependency closure, run on the nixpkgs
+# Node.js.
+{ lib, stdenvNoCC, importNpmLock, nodejs, makeBinaryWrapper, source }:
 
 let
-  inherit (stdenvNoCC.hostPlatform) system;
-  platform = source.platforms.${system} or (throw "pi: no pinned release for ${system}");
+  nodeModules = importNpmLock.buildNodeModules {
+    npmRoot = ./pi;
+    inherit nodejs;
+    # Like the installer, never run the dependencies' install scripts.
+    derivationArgs.npmRebuildFlags = [ "--ignore-scripts" ];
+  };
 in
 stdenvNoCC.mkDerivation {
   pname = "pi";
   inherit (source) version;
 
-  src = fetchurl { inherit (platform) url sha256; };
-  sourceRoot = "pi";
-
+  dontUnpack = true;
   dontBuild = true;
-  # A Bun single-file executable: stripping drops the embedded app.
-  dontStrip = true;
 
-  nativeBuildInputs = [ autoPatchelfHook makeBinaryWrapper ];
-  # The bundled X11 clipboard addon (native/linux/prebuilds/*/*.node).
-  buildInputs = [ libxcb ];
+  nativeBuildInputs = [ makeBinaryWrapper ];
 
-  # The binary reads its themes, docs, and addons from beside itself, so the
-  # release directory stays intact. `pi update` can't replace a standalone
-  # binary, and skipping the version check keeps Pi from nagging about the pin.
+  # npm links bin/pi with a shebang patched to the nixpkgs Node.js. `pi update`
+  # refuses to replace a read-only install no package manager owns, and
+  # skipping the version check keeps Pi from nagging about the pin.
   installPhase = ''
     runHook preInstall
-    mkdir -p "$out/libexec"
-    cp -r . "$out/libexec/pi"
-    makeBinaryWrapper "$out/libexec/pi/pi" "$out/bin/pi" \
+    makeBinaryWrapper "${nodeModules}/node_modules/.bin/pi" "$out/bin/pi" \
       --set PI_SKIP_VERSION_CHECK 1
     runHook postInstall
   '';
@@ -41,11 +40,10 @@ stdenvNoCC.mkDerivation {
   '';
 
   meta = {
-    description = "Pi coding agent CLI (vendor standalone build)";
+    description = "Pi coding agent CLI (vendor npm release)";
     homepage = "https://pi.dev";
     license = lib.licenses.mit;
-    sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
-    platforms = builtins.attrNames source.platforms;
+    inherit (nodejs.meta) platforms;
     mainProgram = "pi";
   };
 }

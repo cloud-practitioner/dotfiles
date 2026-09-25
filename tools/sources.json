@@ -29,16 +29,6 @@
   },
   "pi": {
     "version": "0.87.1",
-    "checksums": "https://github.com/earendil-works/pi/releases/download/v0.87.1/SHA256SUMS",
-    "platforms": {
-      "x86_64-linux": {
-        "url": "https://github.com/earendil-works/pi/releases/download/v0.87.1/pi-linux-x64.tar.gz",
-        "sha256": "80d78dd62d50049a006b981d994c61255bcc10e730b0c278d4ea0a755909764c"
-      },
-      "aarch64-linux": {
-        "url": "https://github.com/earendil-works/pi/releases/download/v0.87.1/pi-linux-arm64.tar.gz",
-        "sha256": "364b4a9f8491450b27a4857d4e3c780dbaf696790821c176a873e860cbbc3b89"
-      }
-    }
+    "checksums": "https://pi.dev/api/installer/releases/0.87.1/package-lock.json"
   }
 }

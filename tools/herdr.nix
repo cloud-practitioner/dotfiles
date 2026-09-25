@@ -2,8 +2,7 @@
 # The pin's url and sha256 come verbatim from the release manifest
 # (https://herdr.dev/latest.json, recorded as `checksums` in sources.json).
 # The binary is static, so it runs from the store unpatched. It refuses
-# `herdr update` for /nix/store installs; home/.config/herdr/config.toml turns
-# off its background version check.
+# `herdr update` for /nix/store installs.
 { lib, stdenvNoCC, fetchurl, installShellFiles, source }:
 
 let

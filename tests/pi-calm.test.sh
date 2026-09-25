@@ -77,6 +77,22 @@ find_chrome() {
   return 1
 }
 
+# Link Pi's own copy of dependency $1 into fixture $2, found the way Node
+# resolves it from Pi's package: nested under it (npm install -g) or hoisted
+# beside it (the pi.dev installer and the Nix build).
+link_pi_dependency() {
+  local dep=$1 fixture=$2 dir=$PI_PACKAGE_DIR
+  while [ "$dir" != / ]; do
+    if [ -d "$dir/node_modules/$dep" ]; then
+      mkdir -p "$(dirname "$fixture/node_modules/$dep")"
+      ln -s "$dir/node_modules/$dep" "$fixture/node_modules/$dep"
+      return 0
+    fi
+    dir=$(dirname "$dir")
+  done
+  fail "Pi package at $PI_PACKAGE_DIR does not resolve $dep"
+}
+
 # Copy the shipped extension into a fixture layout with resolvable node_modules.
 # Echoes the fixture root. Requires $1 = fixture directory.
 build_node_fixture() {
@@ -84,8 +100,8 @@ build_node_fixture() {
   mkdir -p "$fixture/calm" "$fixture/node_modules/@earendil-works"
   cp -R "$CALM_DIR/index.ts" "$CALM_DIR/lib" "$fixture/calm/"
   ln -s "$PI_PACKAGE_DIR" "$fixture/node_modules/@earendil-works/pi-coding-agent"
-  ln -s "$PI_PACKAGE_DIR/node_modules/@earendil-works/pi-tui" "$fixture/node_modules/@earendil-works/pi-tui"
-  ln -s "$PI_PACKAGE_DIR/node_modules/typebox" "$fixture/node_modules/typebox"
+  link_pi_dependency @earendil-works/pi-tui "$fixture"
+  link_pi_dependency typebox "$fixture"
   printf '%s\n' '{"type":"module"}' >"$fixture/package.json"
 }
 
@@ -161,8 +177,7 @@ test_static_typescript_and_repo_wiring() {
   else
     local fixture="$TMP_ROOT/typecheck"
     build_node_fixture "$fixture"
-    mkdir -p "$fixture/node_modules/@types"
-    ln -s "$PI_PACKAGE_DIR/node_modules/@types/node" "$fixture/node_modules/@types/node"
+    link_pi_dependency @types/node "$fixture"
     cat >"$fixture/tsconfig.json" <<'JSON'
 {
   "compilerOptions": {

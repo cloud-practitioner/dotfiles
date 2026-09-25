@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
-# Bump the herdr, Claude Code, and Pi pins in tools/sources.json to each
-# vendor's latest release. Versions and SHA-256 checksums come from the same
-# manifests the vendors' curl installers read, so a pin always names exactly
-# the artifact `curl ... | sh` would have installed. Usage is below; the
+# Bump the herdr, Claude Code, and Pi pins in tools/sources.json (and Pi's npm
+# lock in tools/pi/) to each vendor's latest release. Versions and hashes come
+# from the same manifests the vendors' curl installers read, so a pin always
+# names exactly what `curl ... | sh` would have installed. Usage is below; the
 # endpoint variables exist so tests can point them at local fixtures.
 set -euo pipefail
 
 CLAUDE_RELEASES_URL=${CLAUDE_RELEASES_URL:-https://downloads.claude.ai/claude-code-releases}
 HERDR_MANIFEST_URL=${HERDR_MANIFEST_URL:-https://herdr.dev/latest.json}
 PI_INSTALLER_API_URL=${PI_INSTALLER_API_URL:-https://pi.dev/api/installer/releases}
-PI_RELEASES_URL=${PI_RELEASES_URL:-https://github.com/earendil-works/pi/releases/download}
+PI_PACKAGE=@earendil-works/pi-coding-agent
 SOURCES=${UPDATE_TOOLS_SOURCES:-tools/sources.json}
+PI_LOCK_DIR=$(dirname "$SOURCES")/pi
 
 # Nix system -> each vendor's platform name. Keep in sync with linuxSystems in flake.nix.
 SYSTEMS=(x86_64-linux aarch64-linux)
 declare -A CLAUDE_PLATFORM=([x86_64-linux]=linux-x64 [aarch64-linux]=linux-arm64)
 declare -A HERDR_PLATFORM=([x86_64-linux]=linux-x86_64 [aarch64-linux]=linux-aarch64)
-declare -A PI_PLATFORM=([x86_64-linux]=linux-x64 [aarch64-linux]=linux-arm64)
 
 die() {
   printf 'update-tools: %s\n' "$*" >&2
@@ -27,8 +27,9 @@ usage() {
   cat <<'EOF'
 Usage: nix run .#update-tools [-- --dry-run]
 
-Bump the herdr, Claude Code, and Pi pins in tools/sources.json to the latest
-upstream releases. --dry-run shows the new pins and writes nothing.
+Bump the herdr, Claude Code, and Pi pins in tools/sources.json and Pi's npm
+lock in tools/pi/ to the latest upstream releases. --dry-run shows the new
+pins and writes nothing.
 Run it from the repository root, then rebuild (README "Upstream CLI tools").
 EOF
 }
@@ -98,21 +99,38 @@ pin_herdr() {
   tool_json "$version" "$HERDR_MANIFEST_URL" "$platforms"
 }
 
-# Pi: install.sh takes the current release from the installer API; the same
-# GitHub release publishes standalone binaries and a SHA256SUMS file.
+# Pi: install.sh reads the release metadata from the installer API, then runs
+# `npm ci` on that release's package.json and package-lock.json. The lock
+# leaves out the hashes of Pi's own packages, which the release metadata lists,
+# so they are added to pin every tarball by hash. Writes both files to dir $1.
 pin_pi() {
-  local version sums_url sums system asset sha256 platforms='{}'
-  version=$(fetch "$PI_INSTALLER_API_URL/latest" | jq -r '.version // empty')
+  local dir=$1 release version release_url lock unhashed
+  release=$(fetch "$PI_INSTALLER_API_URL/latest")
+  version=$(jq -r '.version // empty' <<<"$release")
   check_version pi "$version"
-  sums_url="$PI_RELEASES_URL/v$version/SHA256SUMS"
-  sums=$(fetch "$sums_url")
-  for system in "${SYSTEMS[@]}"; do
-    asset="pi-${PI_PLATFORM[$system]}.tar.gz"
-    sha256=$(awk -v f="$asset" '$2 == f { print $1; exit }' <<<"$sums")
-    check_sha256 "pi $asset" "$sha256"
-    platforms=$(add_platform "$platforms" "$system" "$PI_RELEASES_URL/v$version/$asset" "$sha256")
-  done
-  tool_json "$version" "$sums_url" "$platforms"
+  release_url="$PI_INSTALLER_API_URL/$version"
+  fetch "$release_url/package.json" > "$dir/package.json"
+  jq -e --arg p "$PI_PACKAGE" --arg v "$version" '.version == $v and .dependencies[$p] == $v' \
+    "$dir/package.json" >/dev/null \
+    || die "pi: $release_url/package.json does not describe $PI_PACKAGE@$version"
+  fetch "$release_url/package-lock.json" > "$dir/package-lock.json"
+  lock=$(jq --tab --argjson release "$release" '
+      ($release.packages // [] | map({key: .tarball, value: .integrity}) | from_entries) as $hashes
+      | .packages |= with_entries(
+          if .key == "" or .value.integrity then . else .value.integrity = $hashes[.value.resolved] end)' \
+    "$dir/package-lock.json")
+  printf '%s\n' "$lock" > "$dir/package-lock.json"
+  jq -e --arg p "$PI_PACKAGE" --arg v "$version" '
+      .lockfileVersion == 3 and .version == $v and .packages[""].version == $v
+      and .packages[""].dependencies[$p] == $v and .packages["node_modules/" + $p].version == $v' \
+    "$dir/package-lock.json" >/dev/null \
+    || die "pi: $release_url/package-lock.json does not lock $PI_PACKAGE@$version"
+  unhashed=$(jq -r '[.packages | to_entries[]
+      | select(.key != "" and ((.value.integrity // "") | test("^sha512-") | not)) | .key] | join(" ")' \
+    "$dir/package-lock.json")
+  [ -z "$unhashed" ] || die "pi: no published hash for $unhashed"
+  jq -n --arg version "$version" --arg checksums "$release_url/package-lock.json" \
+    '{version: $version, checksums: $checksums}'
 }
 
 main() {
@@ -124,11 +142,13 @@ main() {
     *) usage >&2; return 2 ;;
   esac
   [ -f "$SOURCES" ] || die "$SOURCES not found; run from the dotfiles repository root"
+  stage=$(mktemp -d)
+  trap 'rm -rf "$stage"' EXIT
 
   old=$(cat "$SOURCES")
   claude_code=$(pin_claude_code)
   herdr=$(pin_herdr)
-  pi=$(pin_pi)
+  pi=$(pin_pi "$stage")
   new=$(jq -n --argjson c "$claude_code" --argjson h "$herdr" --argjson p "$pi" \
     '{"claude-code": $c, herdr: $h, pi: $p}')
 
@@ -138,18 +158,22 @@ main() {
       "$(jq -r --arg t "$tool" '.[$t].version' <<<"$new")"
   done
 
-  if [ "$(jq -S . <<<"$old")" = "$(jq -S . <<<"$new")" ]; then
+  if [ "$(jq -S . <<<"$old")" = "$(jq -S . <<<"$new")" ] \
+    && cmp -s "$stage/package.json" "$PI_LOCK_DIR/package.json" \
+    && cmp -s "$stage/package-lock.json" "$PI_LOCK_DIR/package-lock.json"; then
     echo "All pins are already current."
     return 0
   fi
   if [ "$dry_run" = 1 ]; then
-    echo "Dry run: $SOURCES left unchanged. It would become:"
+    echo "Dry run: $SOURCES and $PI_LOCK_DIR left unchanged. $SOURCES would become:"
     printf '%s\n' "$new"
     return 0
   fi
+  mkdir -p "$PI_LOCK_DIR"
+  cp "$stage/package.json" "$stage/package-lock.json" "$PI_LOCK_DIR/"
   printf '%s\n' "$new" > "$SOURCES.tmp"
   mv "$SOURCES.tmp" "$SOURCES"
-  echo "Updated $SOURCES. Commit it, then rebuild each environment (README \"Upstream CLI tools\")."
+  echo "Updated $SOURCES and $PI_LOCK_DIR. Commit them, then rebuild each environment (README \"Upstream CLI tools\")."
 }
 
 main "$@"
