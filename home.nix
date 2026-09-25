@@ -13,6 +13,33 @@ let
     ghPersonal = "~/.ssh/id_ed25519_gh_personal";
     bbWork = "~/.ssh/id_ed25519_bb_work";
   };
+  # Moves these PATH entries right after ~/.nix-profile/bin (herdr), or to the
+  # front without it, once each, so they win over the system's and WSL's
+  # Windows-interop (/mnt/*) copies: pnpm's global bins (Claude Code, Pi,
+  # GitHub Copilot CLI; $PNPM_HOME/bin for pnpm 11+, $PNPM_HOME for older
+  # pnpm) and, on the workstation first, $NVM_DIR/default/bin (nvm's default
+  # Node.js, npm, and pnpm, linked by tools/node-tools.sh).
+  nodePath = pkgs.writeText "node-tools-path.sh" ''
+    __nt_front="${lib.concatStringsSep ":" (lib.optional isWorkstation "$NVM_DIR/default/bin" ++ [ "$PNPM_HOME/bin" "$PNPM_HOME" ])}"
+    __nt_rest="$PATH:"
+    __nt_path=
+    __nt_placed=
+    while [ -n "$__nt_rest" ]; do
+      __nt_dir=''${__nt_rest%%:*}
+      __nt_rest=''${__nt_rest#*:}
+      case ":$__nt_front:" in
+        *":$__nt_dir:"*) continue ;;
+      esac
+      __nt_path=''${__nt_path:+$__nt_path:}$__nt_dir
+      if [ -z "$__nt_placed" ] && [ "$__nt_dir" = "$HOME/.nix-profile/bin" ]; then
+        __nt_path=$__nt_path:$__nt_front
+        __nt_placed=1
+      fi
+    done
+    [ -n "$__nt_placed" ] || __nt_path=$__nt_front''${__nt_path:+:$__nt_path}
+    export PATH="$__nt_path"
+    unset __nt_front __nt_rest __nt_path __nt_placed __nt_dir
+  '';
 in
 
 {
@@ -52,14 +79,10 @@ in
   } // lib.optionalAttrs (pkgs.stdenv.isLinux && isWorkstation) {
     NVM_DIR = "\${NVM_DIR:-$HOME/.nvm}";
   };
-  # Every Linux shell, not just interactive zsh, finds pnpm's global bins
-  # (Claude Code, Pi, GitHub Copilot CLI) at the end of PATH, after
-  # ~/.nix-profile/bin (herdr): $PNPM_HOME/bin for pnpm 11+, $PNPM_HOME for
-  # older pnpm. On the workstation, $NVM_DIR/default/bin (nvm's default
-  # Node.js, npm, and pnpm, linked by tools/node-tools.sh) comes just before
-  # them; the interactive zsh then loads nvm itself.
+  # Every Linux shell, not just interactive zsh, gets nodePath (above); the
+  # interactive workstation zsh then loads nvm itself.
   home.sessionVariablesExtra = lib.mkIf pkgs.stdenv.isLinux ''
-    export PATH="''${PATH:+$PATH:}${lib.optionalString isWorkstation "$NVM_DIR/default/bin:"}$PNPM_HOME/bin:$PNPM_HOME"
+    . ${nodePath}
   '';
   # zsh reads the session variables from ~/.zshenv. A bash login shell reads
   # them here, then the distro's own ~/.profile (and through it ~/.bashrc),
@@ -167,6 +190,10 @@ in
           trap - INT
         fi
       fi
+    '' + lib.optionalString pkgs.stdenv.isLinux ''
+
+      # Again after the global rc files and nvm, which may reorder PATH.
+      . ${nodePath}
     '';
     shellAliases = {
       ".." = "cd ..";

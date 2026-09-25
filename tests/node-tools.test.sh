@@ -22,9 +22,10 @@
 #   container activation keeps the user's PATH for the image's pnpm;
 # - the workstation's interactive zsh puts nvm's node, npm, and pnpm first on
 #   PATH; in both profiles every zsh (interactive or not) and a bash login
-#   shell find pnpm's global bin (claude, pi, copilot) after
-#   ~/.nix-profile/bin, and on the workstation also nvm's default Node.js
-#   bin ($NVM_DIR/default/bin); the container never puts nvm on PATH.
+#   shell find pnpm's global bin (claude, pi, copilot) right after
+#   ~/.nix-profile/bin (herdr), once and ahead of system and Windows-interop
+#   copies, and on the workstation also nvm's default Node.js bin
+#   ($NVM_DIR/default/bin); the container never puts nvm on PATH.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -322,26 +323,58 @@ test_activation() {
 
 # --- shells ---------------------------------------------------------------------
 
-# Asserts that the PATH lines in $2 put $3 after ~/.nix-profile/bin ($1 is the
-# scratch HOME; $4 names the shell).
-assert_after_nix_profile() {
-  local home=$1 out=$2 dir=$3 shell=$4 nix_idx dir_idx
-  nix_idx=$(grep -nxF "$home/.nix-profile/bin" <<<"$out" | head -n1 | cut -d: -f1)
-  dir_idx=$(grep -nxF "$dir" <<<"$out" | head -n1 | cut -d: -f1)
-  [ -n "$nix_idx" ] && [ -n "$dir_idx" ] && [ "$nix_idx" -lt "$dir_idx" ] \
-    || fail "$shell: $dir is not after ~/.nix-profile/bin on PATH: $out"
+TOOLS="herdr node npm pnpm claude pi copilot"
+
+# Checks shell $2's report $3 (NAME=first match lines, then path=DIR lines) for
+# profile $1 in scratch HOME $4: herdr is the Nix profile's, claude, pi, and
+# copilot are pnpm's, node, npm, and pnpm are from $5 on the workstation, and
+# the nvm default bin (workstation) and pnpm dirs sit right after
+# ~/.nix-profile/bin, once each.
+check_shell() {
+  local profile=$1 shell=$2 out=$3 home=$4 node_dir=${5-} tool dir front path
+  local pnpm_home="$home/.local/share/pnpm"
+  grep -qxF "herdr=$home/.nix-profile/bin/herdr" <<<"$out" || fail "$profile $shell: herdr is not the Nix profile's: $out"
+  for tool in claude pi copilot; do
+    grep -qxF "$tool=$pnpm_home/bin/$tool" <<<"$out" || fail "$profile $shell: $tool is not pnpm's: $out"
+  done
+  front="$pnpm_home/bin:$pnpm_home"
+  case "$profile" in
+    *@container-*)
+      assert_not_contains "$out" "$home/.nvm" "$profile $shell: the container puts nvm on PATH: $out"
+      ;;
+    *)
+      for tool in node npm pnpm; do
+        grep -qxF "$tool=$node_dir/$tool" <<<"$out" || fail "$profile $shell: $tool is not from $node_dir: $out"
+      done
+      front="$home/.nvm/default/bin:$front"
+      ;;
+  esac
+  path=":$(sed -n 's/^path=//p' <<<"$out" | tr '\n' ':')"
+  assert_contains "$path" ":$home/.nix-profile/bin:$front:" "$profile $shell: $front is not right after ~/.nix-profile/bin: $path"
+  for dir in ${front//:/ }; do
+    [ "$(grep -cxF "path=$dir" <<<"$out")" = 1 ] || fail "$profile $shell: $dir is not on PATH exactly once: $path"
+  done
 }
 
 test_shell_path() {
-  local files home out profile tool pnpm_bin node_bin shell
+  local files home out profile tool win start node_default
   have_linux_nix || return 0
   command -v zsh >/dev/null 2>&1 || { echo "skip: zsh not found"; return 0; }
   profiles_init
+  # WSL appends the Windows PATH, which can hold extensionless npm shims.
+  win="$TMP_ROOT/mnt/c/Users/dev/AppData/Roaming/npm"
+  mkdir -p "$win"
+  for tool in $TOOLS; do
+    printf '#!/bin/sh\necho windows-%s\n' "$tool" >"$win/$tool"
+    chmod +x "$win/$tool"
+  done
   for profile in "$WS" "$CT"; do
     files=$(nix build --no-link --print-out-paths "$ROOT#homeConfigurations.\"$profile\".config.home-files" 2>/dev/null) \
       || fail "$profile: home-files build failed"
     home="$TMP_ROOT/sh-${profile//[@\/]/-}"
     mkdir -p "$home/.nix-profile/bin"
+    printf '#!/bin/sh\necho herdr-fake\n' >"$home/.nix-profile/bin/herdr"
+    chmod +x "$home/.nix-profile/bin/herdr"
     case "$profile" in
       *@container-*) PNPM_HOME="$home/.local/share/pnpm" run_tools "$home" container "$FIX/pnpm-only:$BASE_PATH" >/dev/null ;;
       *) run_tools "$home" workstation "$BASE_PATH" >/dev/null ;;
@@ -350,69 +383,30 @@ test_shell_path() {
     { cat "$files/.zshrc"; echo 'HISTFILE="$HOME/.zsh_history"'; } >"$home/.zshrc"
     cp -L "$files/.zshenv" "$home/.zshenv"
     cp -L "$files/.bash_profile" "$home/.bash_profile"
-    pnpm_bin="$home/.local/share/pnpm/bin"
-    node_bin="$home/.nvm/default/bin"
+    start="$home/.nix-profile/bin:$BASE_PATH:$win"
+    node_default="$home/.nvm/default/bin"
 
-    # A fresh environment, as a new terminal or `wsl.exe -e` gets. zsh -d skips
-    # the host's global rc files (a devcontainer's /etc/zsh/zshrc sets its own
-    # NVM_DIR), leaving only the generated ones.
+    # A fresh environment, as a new terminal or `wsl.exe -e` gets. zsh -d and
+    # bash --noprofile skip the host's global rc files (a devcontainer's set
+    # their own NVM_DIR and PATH), leaving only the generated ones; the bash
+    # login shell then reads ~/.bash_profile as it would without them.
     # shellcheck disable=SC2016 # expanded by the scratch zsh, not here
-    out=$(env -i HOME="$home" ZDOTDIR="$home" TERM=xterm PATH="$home/.nix-profile/bin:$BASE_PATH" \
-      zsh -d -i -c 'for c in node npm pnpm claude pi copilot; do print -r -- "$c=$(whence -p $c)"; done; print -rl -- $path' \
+    out=$(env -i HOME="$home" ZDOTDIR="$home" TERM=xterm PATH="$start" zsh -d -i -c \
+      'for c in '"$TOOLS"'; do print -r -- "$c=$(whence -p $c)"; done; for p in $path; do print -r -- "path=$p"; done' \
       </dev/null 2>/dev/null)
-    for tool in claude pi copilot; do
-      assert_contains "$out" "$tool=$pnpm_bin/$tool" "$profile interactive zsh: $tool is not pnpm's: $out"
-    done
-    assert_after_nix_profile "$home" "$out" "$pnpm_bin" "$profile interactive zsh"
-    case "$profile" in
-      *@container-*)
-        assert_not_contains "$out" "$home/.nvm" "$profile: the container zsh loads nvm: $out"
-        ;;
-      *)
-        for tool in node npm pnpm; do
-          assert_contains "$out" "$tool=$home/.nvm/versions/node/$FAKE_NODE/bin/$tool" "$profile interactive zsh: $tool is not nvm's: $out"
-        done
-        ;;
-    esac
-
-    # Shells that never read ~/.zshrc: a non-interactive zsh and a bash login
-    # shell. The bash login shell reads the host's /etc/profile, which may put
-    # its own copies first, so there each tool only has to be found somewhere
-    # on PATH at the expected place.
-    for shell in "zsh -c" "bash -l"; do
-      case "$shell" in
-        zsh*)
-          # shellcheck disable=SC2016 # expanded by the scratch zsh, not here
-          out=$(env -i HOME="$home" ZDOTDIR="$home" PATH="$home/.nix-profile/bin:$BASE_PATH" \
-            zsh -d -c 'for c in node npm pnpm claude pi copilot; do for p in $(whence -pa $c); do print -r -- "$c=$p"; done; done; print -rl -- $path' \
-            </dev/null 2>/dev/null)
-          ;;
-        bash*)
-          # shellcheck disable=SC2016 # expanded by the scratch bash, not here
-          out=$(env -i HOME="$home" PATH="$home/.nix-profile/bin:$BASE_PATH" \
-            bash -l -c 'for c in node npm pnpm claude pi copilot; do for p in $(type -aP $c); do echo "$c=$p"; done; done; tr : "\n" <<<"$PATH"' \
-            </dev/null 2>/dev/null)
-          ;;
-      esac
-      for tool in claude pi copilot; do
-        grep -qxF "$tool=$pnpm_bin/$tool" <<<"$out" || fail "$profile $shell: $tool is not pnpm's: $out"
-      done
-      assert_after_nix_profile "$home" "$out" "$pnpm_bin" "$profile $shell"
-      case "$profile" in
-        *@container-*)
-          assert_not_contains "$out" "$home/.nvm" "$profile $shell: the container puts nvm on PATH: $out"
-          ;;
-        *)
-          for tool in node npm pnpm; do
-            grep -qxF "$tool=$node_bin/$tool" <<<"$out" || fail "$profile $shell: $tool is not nvm's default: $out"
-          done
-          [ "$("$node_bin/node")" = "$FAKE_NODE" ] || fail "$profile $shell: $node_bin/node is not nvm's default Node.js"
-          assert_after_nix_profile "$home" "$out" "$node_bin" "$profile $shell"
-          ;;
-      esac
-    done
+    check_shell "$profile" "interactive zsh" "$out" "$home" "$home/.nvm/versions/node/$FAKE_NODE/bin"
+    # shellcheck disable=SC2016 # expanded by the scratch zsh, not here
+    out=$(env -i HOME="$home" ZDOTDIR="$home" PATH="$start" zsh -d -c \
+      'for c in '"$TOOLS"'; do print -r -- "$c=$(whence -p $c)"; done; for p in $path; do print -r -- "path=$p"; done' \
+      </dev/null 2>/dev/null)
+    check_shell "$profile" "zsh -c" "$out" "$home" "$node_default"
+    # shellcheck disable=SC2016 # expanded by the scratch bash, not here
+    out=$(env -i HOME="$home" PATH="$start" bash --noprofile -l -c \
+      '. "$HOME/.bash_profile"; for c in '"$TOOLS"'; do echo "$c=$(type -P $c)"; done; IFS=:; for p in $PATH; do echo "path=$p"; done' \
+      </dev/null 2>/dev/null)
+    check_shell "$profile" "bash login" "$out" "$home" "$node_default"
   done
-  pass "both profiles put pnpm's claude, pi, and copilot on PATH after ~/.nix-profile/bin in interactive and non-interactive zsh and a bash login shell; the workstation adds nvm's default node, npm, and pnpm there, and its interactive zsh loads nvm"
+  pass "in both profiles every zsh and a bash login shell run herdr from ~/.nix-profile/bin and claude, pi, and copilot from pnpm, right after it and ahead of system and Windows copies, once each; the workstation adds nvm's default node, npm, and pnpm there, and its interactive zsh loads nvm"
 }
 
 test_workstation_fresh_then_quiet
