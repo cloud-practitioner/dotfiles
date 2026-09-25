@@ -6,6 +6,13 @@ let
   # identities) so the same shell/tools can be reused inside a devcontainer
   # that borrows the WSL2 host's forwarded agent instead.
   isWorkstation = profile == "workstation";
+  # Private keys behind the SSH host aliases (programs.ssh), which the
+  # workstation zsh init also loads into an empty agent.
+  sshKeys = {
+    ghWork = "~/.ssh/id_ed25519_gh_work";
+    ghPersonal = "~/.ssh/id_ed25519_gh_personal";
+    bbWork = "~/.ssh/id_ed25519_bb_work";
+  };
 in
 
 {
@@ -106,9 +113,11 @@ in
       if [[ -o interactive ]]; then
         ssh-add -l >/dev/null 2>&1
         if [ "$?" = 1 ]; then
-          ssh-add ~/.ssh/id_ed25519_gh_work \
-                  ~/.ssh/id_ed25519_gh_personal \
-                  ~/.ssh/id_ed25519_bb_work 2>/dev/null
+          trap : INT
+          ssh-add ${sshKeys.ghWork} \
+                  ${sshKeys.ghPersonal} \
+                  ${sshKeys.bbWork} 2>/dev/null
+          trap - INT
         fi
       fi
     '';
@@ -138,19 +147,19 @@ in
       "github.com-personal" = {
         hostname = "github.com";
         user = "git";
-        identityFile = "~/.ssh/id_ed25519_gh_personal";
+        identityFile = sshKeys.ghPersonal;
         identitiesOnly = true;
       };
       "github.com-work" = {
         hostname = "github.com";
         user = "git";
-        identityFile = "~/.ssh/id_ed25519_gh_work";
+        identityFile = sshKeys.ghWork;
         identitiesOnly = true;
       };
       "bitbucket.org-work" = {
         hostname = "bitbucket.org";
         user = "git";
-        identityFile = "~/.ssh/id_ed25519_bb_work";
+        identityFile = sshKeys.bbWork;
         identitiesOnly = true;
       };
     };

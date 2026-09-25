@@ -12,6 +12,8 @@
 # - workstation, no agent running: no key is added;
 # - workstation, empty agent: all three keys are loaded;
 # - workstation, agent already holding a key: the agent is left alone;
+# - workstation, Ctrl+C at a passphrase prompt: ssh-add is cancelled and the
+#   rest of .zshrc still runs;
 # - container, empty agent: no key is added.
 set -u
 
@@ -34,8 +36,9 @@ cleanup() {
 trap cleanup EXIT
 
 # Keep the runner's own agent out of reach: the generated .zshenv keeps an
-# inherited SSH_AUTH_SOCK inside an SSH session.
-unset SSH_AUTH_SOCK SSH_CONNECTION SSH_AGENT_PID
+# inherited SSH_AUTH_SOCK inside an SSH session. Passphrase prompts go to the
+# terminal, never to an askpass program.
+unset SSH_AUTH_SOCK SSH_CONNECTION SSH_AGENT_PID SSH_ASKPASS SSH_ASKPASS_REQUIRE
 export XDG_RUNTIME_DIR="$TMP_ROOT/run"
 export SSH_AUTH_SOCK="$XDG_RUNTIME_DIR/ssh-agent"
 mkdir -m 700 "$XDG_RUNTIME_DIR" || fail "create scratch XDG_RUNTIME_DIR"
@@ -54,6 +57,32 @@ printf '%s\n' "\$*" >>"$SHIM_LOG"
 exec "$(command -v ssh-add)" "\$@"
 EOF
 chmod +x "$TMP_ROOT/bin/ssh-add"
+
+# Drives `zsh -i` in a pseudo-terminal against the scratch HOME given as $1 and
+# presses Ctrl+C at the first passphrase prompt, then waits up to ~10s for
+# .zshrc to reach its end.
+CTRL_C_DRIVER="$TMP_ROOT/ctrl-c.zsh"
+cat >"$CTRL_C_DRIVER" <<'EOF'
+zmodload zsh/zpty || exit 1
+home=$1 out= chunk=
+zpty -b sh "HOME=${(q)home} ZDOTDIR=${(q)home} TERM=xterm zsh -i -c exit"
+for i in {1..200}; do
+  while zpty -r sh chunk; do out+=$chunk; done
+  [[ $out == *'Enter passphrase'* ]] && break
+  sleep 0.05
+done
+if [[ $out != *'Enter passphrase'* ]]; then
+  print -r -- "no passphrase prompt, got: $out"
+  zpty -d sh
+  exit 1
+fi
+zpty -w -n sh $'\C-c'
+for i in {1..200}; do
+  [[ -e $home/rc-finished ]] && break
+  sleep 0.05
+done
+zpty -d sh
+EOF
 
 # Sorted SHA256 fingerprints of the named throwaway keys, or of the agent's.
 key_fingerprints() {
@@ -80,10 +109,12 @@ profile_home() {
   chmod 700 "$PROFILE_HOME/.ssh"
   cp -p "$TMP_ROOT/keys/"* "$PROFILE_HOME/.ssh/"
   # The generated .zshrc hard-codes HISTFILE; keep history in the scratch HOME.
+  # rc-finished marks that the whole generated .zshrc ran.
   {
     cat "$files/.zshrc"
     cat <<'EOF'
 HISTFILE="$HOME/.zsh_history"
+: >"$HOME/rc-finished"
 EOF
   } >"$PROFILE_HOME/.zshrc"
   [ -e "$files/.zshenv" ] && cp -L "$files/.zshenv" "$PROFILE_HOME/.zshenv"
@@ -127,6 +158,16 @@ start_shell "$ws_home"
   || fail "$WS: agent holding a key keeps exactly that key"
 assert_no_key_added "$WS: agent holding a key, no key is added"
 pass "$WS: agent already holding a key is left alone"
+
+ssh-add -D >/dev/null 2>&1 || fail "empty the throwaway agent"
+ssh-keygen -p -q -P '' -N 'throwaway passphrase' -f "$ws_home/.ssh/id_ed25519_gh_work" \
+  >/dev/null || fail "put a passphrase on one key"
+rm -f "$ws_home/rc-finished"
+out=$(zsh -f "$CTRL_C_DRIVER" "$ws_home" 2>&1) \
+  || fail "$WS: passphrase prompt shows in the terminal ($out)"
+[ -z "$(agent_fingerprints)" ] || fail "$WS: Ctrl+C at the passphrase prompt cancels ssh-add"
+[ -e "$ws_home/rc-finished" ] || fail "$WS: Ctrl+C at the passphrase prompt, the rest of .zshrc runs"
+pass "$WS: Ctrl+C at a passphrase prompt cancels only ssh-add"
 
 CT="node@container-$SYSTEM"
 profile_home "$CT"

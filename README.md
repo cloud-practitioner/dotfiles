@@ -138,8 +138,8 @@ The **private keys are not managed by Nix** - copy them into `~/.ssh` yourself
 an interactive workstation zsh loads these three keys into it at startup - it
 may ask for their passphrases once - and they are ready before `devcontainer up`.
 `AddKeysToAgent yes` still loads a key into the agent the first time it's used.
-Edit `programs.ssh.matchBlocks` and the startup `ssh-add` key list in `home.nix`
-to match your own hosts/keys.
+Edit the key paths in `sshKeys` at the top of `home.nix` and the hosts in
+`programs.ssh.matchBlocks` to match your own hosts/keys.
 
 ### Devcontainers
 
@@ -178,7 +178,7 @@ If you clone it, review these before you run `bootstrap.sh`:
   All three have to match.
 - **CPU architecture**, `hostPlatform` in `configuration.nix` (see Prerequisites above).
 - **Container users** (Linux): if a devcontainer's non-root user differs from your workstation username, add it to the `containerUsers` list in `flake.nix` so a `…@container-…` config exists for it.
-- **SSH keys** (Linux/WSL2): the workstation profile references keys by path in `home.nix`'s `programs.ssh.matchBlocks` and in the zsh `ssh-add` block that loads them at startup. Point both at your own hosts/keys and copy the private keys into `~/.ssh` yourself - Nix doesn't manage secrets.
+- **SSH keys** (Linux/WSL2): the workstation profile defines its key paths once, in `sshKeys` at the top of `home.nix`; `programs.ssh.matchBlocks` maps hosts to them and the zsh init loads them at startup. Point them at your own hosts/keys and copy the private keys into `~/.ssh` yourself - Nix doesn't manage secrets.
 
 **Git identity:** this config deliberately does not set your git name or email.
 Git will stop your first commit and tell you to set them (`git config --global user.name "Your Name"` and `git config --global user.email you@example.com`).
