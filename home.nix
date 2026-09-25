@@ -18,8 +18,14 @@ let
   # Windows-interop (/mnt/*) copies: pnpm's global bins (Claude Code, Pi,
   # GitHub Copilot CLI; $PNPM_HOME/bin for pnpm 11+, $PNPM_HOME for older
   # pnpm) and, on the workstation first, $NVM_DIR/default/bin (nvm's default
-  # Node.js, npm, and pnpm, linked by tools/node-tools.sh).
-  nodePath = pkgs.writeText "node-tools-path.sh" ''
+  # Node.js, npm, and pnpm, linked by tools/node-tools.sh). It sets PNPM_HOME
+  # and NVM_DIR itself, with the same defaults as tools/node-tools.sh (and
+  # pnpm): an image's own PNPM_HOME wins.
+  nodePath = pkgs.writeText "node-tools-path.sh" (''
+    export PNPM_HOME="''${PNPM_HOME:-''${XDG_DATA_HOME:-$HOME/.local/share}/pnpm}"
+  '' + lib.optionalString isWorkstation ''
+    export NVM_DIR="''${NVM_DIR:-$HOME/.nvm}"
+  '' + ''
     __nt_front="${lib.concatStringsSep ":" (lib.optional isWorkstation "$NVM_DIR/default/bin" ++ [ "$PNPM_HOME/bin" "$PNPM_HOME" ])}"
     __nt_rest="$PATH:"
     __nt_path=
@@ -39,7 +45,7 @@ let
     [ -n "$__nt_placed" ] || __nt_path=$__nt_front''${__nt_path:+:$__nt_path}
     export PATH="$__nt_path"
     unset __nt_front __nt_rest __nt_path __nt_placed __nt_dir
-  '';
+  '');
 in
 
 {
@@ -70,26 +76,17 @@ in
     devcontainer
   ];
   fonts.fontconfig.enable = true;
-  home.sessionVariables = {
-    EDITOR = "nvim";
-  } // lib.optionalAttrs pkgs.stdenv.isLinux {
-    # The same defaults as tools/node-tools.sh (and pnpm itself); an image's own
-    # PNPM_HOME wins.
-    PNPM_HOME = "\${PNPM_HOME:-\${XDG_DATA_HOME:-$HOME/.local/share}/pnpm}";
-  } // lib.optionalAttrs (pkgs.stdenv.isLinux && isWorkstation) {
-    NVM_DIR = "\${NVM_DIR:-$HOME/.nvm}";
-  };
-  # Every Linux shell, not just interactive zsh, gets nodePath (above); the
-  # interactive workstation zsh then loads nvm itself.
-  home.sessionVariablesExtra = lib.mkIf pkgs.stdenv.isLinux ''
-    . ${nodePath}
-  '';
-  # zsh reads the session variables from ~/.zshenv. A bash login shell reads
-  # them here, then the distro's own ~/.profile (and through it ~/.bashrc),
-  # which Home Manager leaves alone.
+  home.sessionVariables.EDITOR = "nvim";
+  # Every Linux shell, not just interactive zsh, runs nodePath (above), even
+  # when an older environment marks the session variables as already sourced:
+  # zsh from ~/.zshenv (programs.zsh.envExtra), a bash login shell from here,
+  # after the session variables and before the distro's own ~/.profile (and
+  # through it ~/.bashrc), which Home Manager leaves alone. The interactive
+  # workstation zsh then loads nvm itself.
   home.file.".bash_profile" = lib.mkIf pkgs.stdenv.isLinux {
     text = ''
       . "${config.home.sessionVariablesPackage}/etc/profile.d/hm-session-vars.sh"
+      . ${nodePath}
       [ -f "$HOME/.profile" ] && . "$HOME/.profile"
     '';
   };
@@ -123,6 +120,9 @@ in
     defaultKeymap = "emacs";
     autosuggestion.enable = true;      # ghost text from history
     syntaxHighlighting.enable = true;  # commands turn green when valid
+    envExtra = lib.optionalString pkgs.stdenv.isLinux ''
+      . ${nodePath}
+    '';
     initContent = ''
       bindkey '^f' autosuggest-accept
 

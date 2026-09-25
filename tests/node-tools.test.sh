@@ -325,11 +325,11 @@ test_activation() {
 
 TOOLS="herdr node npm pnpm claude pi copilot"
 
-# Checks shell $2's report $3 (NAME=first match lines, then path=DIR lines) for
+# Checks shell $2's report $3 (NAME=first match, rawpath=PATH, then path=DIR lines) for
 # profile $1 in scratch HOME $4: herdr is the Nix profile's, claude, pi, and
 # copilot are pnpm's, node, npm, and pnpm are from $5 on the workstation, and
 # the nvm default bin (workstation) and pnpm dirs sit right after
-# ~/.nix-profile/bin, once each.
+# ~/.nix-profile/bin, once each, and PATH has no empty entry.
 check_shell() {
   local profile=$1 shell=$2 out=$3 home=$4 node_dir=${5-} tool dir front path
   local pnpm_home="$home/.local/share/pnpm"
@@ -348,6 +348,9 @@ check_shell() {
       done
       front="$home/.nvm/default/bin:$front"
       ;;
+  esac
+  case "$(sed -n 's/^rawpath=//p' <<<"$out")" in
+    "" | :* | *: | *::*) fail "$profile $shell: PATH is empty or has an empty entry: $out" ;;
   esac
   path=":$(sed -n 's/^path=//p' <<<"$out" | tr '\n' ':')"
   assert_contains "$path" ":$home/.nix-profile/bin:$front:" "$profile $shell: $front is not right after ~/.nix-profile/bin: $path"
@@ -386,27 +389,32 @@ test_shell_path() {
     start="$home/.nix-profile/bin:$BASE_PATH:$win"
     node_default="$home/.nvm/default/bin"
 
-    # A fresh environment, as a new terminal or `wsl.exe -e` gets. zsh -d and
-    # bash --noprofile skip the host's global rc files (a devcontainer's set
-    # their own NVM_DIR and PATH), leaving only the generated ones; the bash
-    # login shell then reads ~/.bash_profile as it would without them.
-    # shellcheck disable=SC2016 # expanded by the scratch zsh, not here
-    out=$(env -i HOME="$home" ZDOTDIR="$home" TERM=xterm PATH="$start" zsh -d -i -c \
-      'for c in '"$TOOLS"'; do print -r -- "$c=$(whence -p $c)"; done; for p in $path; do print -r -- "path=$p"; done' \
-      </dev/null 2>/dev/null)
-    check_shell "$profile" "interactive zsh" "$out" "$home" "$home/.nvm/versions/node/$FAKE_NODE/bin"
-    # shellcheck disable=SC2016 # expanded by the scratch zsh, not here
-    out=$(env -i HOME="$home" ZDOTDIR="$home" PATH="$start" zsh -d -c \
-      'for c in '"$TOOLS"'; do print -r -- "$c=$(whence -p $c)"; done; for p in $path; do print -r -- "path=$p"; done' \
-      </dev/null 2>/dev/null)
-    check_shell "$profile" "zsh -c" "$out" "$home" "$node_default"
-    # shellcheck disable=SC2016 # expanded by the scratch bash, not here
-    out=$(env -i HOME="$home" PATH="$start" bash --noprofile -l -c \
-      '. "$HOME/.bash_profile"; for c in '"$TOOLS"'; do echo "$c=$(type -P $c)"; done; IFS=:; for p in $PATH; do echo "path=$p"; done' \
-      </dev/null 2>/dev/null)
-    check_shell "$profile" "bash login" "$out" "$home" "$node_default"
+    # A fresh environment, as a new terminal or `wsl.exe -e` gets, then one
+    # from a process started before this config (a herdr or tmux server) that
+    # marks Home Manager's session variables as sourced but has no PNPM_HOME
+    # or NVM_DIR. zsh -d and bash --noprofile skip the host's global rc files
+    # (a devcontainer's set their own NVM_DIR and PATH), leaving only the
+    # generated ones; the bash login shell then reads ~/.bash_profile as it
+    # would without them.
+    for stale in "" "__HM_SESS_VARS_SOURCED=1 __HM_ZSH_SESS_VARS_SOURCED=1"; do
+      # shellcheck disable=SC2016,SC2086 # expanded by the scratch zsh; $stale splits into assignments
+      out=$(env -i $stale HOME="$home" ZDOTDIR="$home" TERM=xterm PATH="$start" zsh -d -i -c \
+        'for c in '"$TOOLS"'; do print -r -- "$c=$(whence -p $c)"; done; print -r -- "rawpath=$PATH"; for p in $path; do print -r -- "path=$p"; done' \
+        </dev/null 2>/dev/null)
+      check_shell "$profile" "interactive zsh${stale:+ ($stale)}" "$out" "$home" "$home/.nvm/versions/node/$FAKE_NODE/bin"
+      # shellcheck disable=SC2016,SC2086 # expanded by the scratch zsh; $stale splits into assignments
+      out=$(env -i $stale HOME="$home" ZDOTDIR="$home" PATH="$start" zsh -d -c \
+        'for c in '"$TOOLS"'; do print -r -- "$c=$(whence -p $c)"; done; print -r -- "rawpath=$PATH"; for p in $path; do print -r -- "path=$p"; done' \
+        </dev/null 2>/dev/null)
+      check_shell "$profile" "zsh -c${stale:+ ($stale)}" "$out" "$home" "$node_default"
+      # shellcheck disable=SC2016,SC2086 # expanded by the scratch bash; $stale splits into assignments
+      out=$(env -i $stale HOME="$home" PATH="$start" bash --noprofile -l -c \
+        '. "$HOME/.bash_profile"; for c in '"$TOOLS"'; do echo "$c=$(type -P $c)"; done; echo "rawpath=$PATH"; IFS=:; for p in $PATH; do echo "path=$p"; done' \
+        </dev/null 2>/dev/null)
+      check_shell "$profile" "bash login${stale:+ ($stale)}" "$out" "$home" "$node_default"
+    done
   done
-  pass "in both profiles every zsh and a bash login shell run herdr from ~/.nix-profile/bin and claude, pi, and copilot from pnpm, right after it and ahead of system and Windows copies, once each; the workstation adds nvm's default node, npm, and pnpm there, and its interactive zsh loads nvm"
+  pass "in both profiles every zsh and a bash login shell, fresh or from an environment that already sourced the session variables, run herdr from ~/.nix-profile/bin and claude, pi, and copilot from pnpm, right after it and ahead of system and Windows copies, once each; the workstation adds nvm's default node, npm, and pnpm there, and its interactive zsh loads nvm"
 }
 
 test_workstation_fresh_then_quiet

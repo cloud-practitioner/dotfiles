@@ -34,7 +34,7 @@ set -euo pipefail
 
 NVM_VERSION=v0.40.8
 NVM_INSTALL_URL=${NVM_INSTALL_URL:-https://raw.githubusercontent.com/nvm-sh/nvm/$NVM_VERSION/install.sh}
-# home.nix sets the same defaults for the shells (home.sessionVariables).
+# home.nix sets the same defaults for the shells (nodePath).
 export NVM_DIR=${NVM_DIR:-$HOME/.nvm}
 export PNPM_HOME=${PNPM_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/pnpm}
 
