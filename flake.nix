@@ -27,7 +27,8 @@
       user = "dev";
 
       # Non-root users that only need the container profile - e.g. the
-      # devcontainer base image's runtime user (CONTAINER_USER in the Dockerfile).
+      # devcontainer base image's runtime user (CONTAINER_USER in the Dockerfile
+      # of cloud-practitioner/agentic-devcontainer).
       # Listing them here lets a container select "<user>@container-<system>" by
       # its own `id -un`, so nothing has to sed-rewrite `user` above at runtime.
       containerUsers = [ "node" ];
@@ -57,8 +58,9 @@
 
       # Workstation configs for the primary user, plus container configs for the
       # primary user and every container user. Keyed "<user>@<system>" and
-      # "<user>@container-<system>" so rebuild.sh / post-create.sh can pick one
-      # from `id -un` + `uname -m`.
+      # "<user>@container-<system>" so rebuild.sh / post-create.sh (in
+      # cloud-practitioner/agentic-devcontainer) can pick one from `id -un` +
+      # `uname -m`.
       workstationConfigs = lib.listToAttrs (map (system: {
         name = "${user}@${system}";
         value = mkLinuxHome { inherit system user; };
@@ -88,7 +90,8 @@
       };
 
       # Workstation + container configs, keyed "<user>@[container-]<system>".
-      # bootstrap.sh / rebuild.sh / post-create.sh select one by `id -un` + arch.
+      # bootstrap.sh / rebuild.sh / post-create.sh (in
+      # cloud-practitioner/agentic-devcontainer) select one by `id -un` + arch.
       homeConfigurations = workstationConfigs // containerConfigs;
     };
 }

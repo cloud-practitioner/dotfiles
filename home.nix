@@ -30,7 +30,8 @@ in
     herdr
   ] ++ lib.optionals (stdenv.isLinux && isWorkstation) [
     # Workstation only. The devcontainer installs Claude Code via the official
-    # installer (Dockerfile), so its Nix profile omits this nixpkgs build.
+    # installer (Dockerfile in cloud-practitioner/agentic-devcontainer), so its
+    # Nix profile omits this nixpkgs build.
     claude-code
     # Build/run devcontainers from the CLI; needs a Docker host.
     devcontainer
@@ -97,7 +98,7 @@ in
         export HM_WELCOME_SHOWN=1
         print -P "%F{blue}dotfiles%f $(git -C "$HOME/.dotfiles" rev-parse --short HEAD 2>/dev/null) - run %F{green}hm-update%f to pull latest and re-switch"
       fi
-    '' + lib.optionalString isWorkstation ''
+    '' + lib.optionalString (pkgs.stdenv.isLinux && isWorkstation) ''
 
       # The systemd ssh-agent starts empty; when it is reachable but has no
       # identities (exit 1), load the keys so `ssh-add -l` is populated before
@@ -125,9 +126,11 @@ in
   # SSH client config lives in the repo so a throwaway WSL2 instance comes up
   # with the same host aliases every time. The private keys themselves are not
   # managed by Nix - drop them into ~/.ssh out of band. Workstation-only: the
-  # devcontainer reuses these keys and aliases via a read-only ~/.ssh bind mount
-  # plus the proxied WSL2 ssh-agent socket (see .devcontainer/devcontainer.json
-  # and Dockerfile), working under both VS Code and the devcontainer CLI.
+  # devcontainer (cloud-practitioner/agentic-devcontainer) reuses these keys via
+  # a read-only ~/.ssh bind mount plus the proxied WSL2 ssh-agent socket, under
+  # both VS Code and the devcontainer CLI. This ~/.ssh/config is a Nix-store
+  # symlink that dangles inside the container, so that repo's Dockerfile
+  # recreates these host aliases.
   programs.ssh = lib.mkIf isWorkstation {
     enable = true;
     matchBlocks = {
