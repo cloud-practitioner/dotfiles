@@ -19,26 +19,27 @@
 # (--allow-build); Pi and Copilot run without any. Each CLI must answer
 # `--version` after it is installed.
 #
-# Every step skips what is already installed and prints nothing then, unless
-# NODE_TOOLS_VERBOSE=1. Any failure exits non-zero with one clear message; the
-# Home Manager activation turns that into a warning so the switch still
-# completes. Usage: tools/node-tools.sh workstation|container
-# NVM_DIR (default ~/.nvm), PNPM_HOME (default ~/.local/share/pnpm), and
-# NVM_INSTALL_URL can be overridden; the tests point them at local fixtures.
+# On the workstation it also points $NVM_DIR/default at nvm's default Node.js,
+# so shells that do not load nvm (home.nix puts $NVM_DIR/default/bin on PATH)
+# still find node, npm, and pnpm.
+#
+# Every step skips what is already installed and prints nothing then. Any
+# failure exits non-zero with one clear message; the Home Manager activation
+# turns that into a warning so the switch still completes.
+# Usage: tools/node-tools.sh workstation|container
+# NVM_DIR (default ~/.nvm), PNPM_HOME (default ${XDG_DATA_HOME:-~/.local/share}/pnpm,
+# as pnpm itself), and NVM_INSTALL_URL can be overridden; the tests point them
+# at local fixtures.
 set -euo pipefail
 
 NVM_VERSION=v0.40.8
 NVM_INSTALL_URL=${NVM_INSTALL_URL:-https://raw.githubusercontent.com/nvm-sh/nvm/$NVM_VERSION/install.sh}
-# home.nix sets the same defaults for the shells.
+# home.nix sets the same defaults for the shells (home.sessionVariables).
 export NVM_DIR=${NVM_DIR:-$HOME/.nvm}
 export PNPM_HOME=${PNPM_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/pnpm}
 
 say() {
   printf 'node-tools: %s\n' "$*"
-}
-
-skip() {
-  [ "${NODE_TOOLS_VERBOSE:-}" != 1 ] || say "$*"
 }
 
 die() {
@@ -57,16 +58,13 @@ nvm_run() {
 }
 
 ensure_nvm() {
-  if [ -s "$NVM_DIR/nvm.sh" ]; then
-    skip "nvm already installed in $NVM_DIR"
-    return 0
-  fi
+  [ ! -s "$NVM_DIR/nvm.sh" ] || return 0
   command -v curl >/dev/null 2>&1 || die "curl is required to install nvm"
   say "installing nvm $NVM_VERSION into $NVM_DIR"
   # The installer refuses a custom NVM_DIR that does not exist yet.
   mkdir -p "$NVM_DIR"
-  # PROFILE=/dev/null keeps the installer out of ~/.zshrc and ~/.bashrc, which
-  # Home Manager owns; home.nix loads nvm in the workstation zsh instead.
+  # PROFILE=/dev/null keeps the installer out of the shell rc files; home.nix
+  # sets NVM_DIR and PATH for every shell and loads nvm in the workstation zsh.
   curl -fsSL --proto-redir '=https' "$NVM_INSTALL_URL" | PROFILE=/dev/null bash >/dev/null \
     || die "cannot install nvm from $NVM_INSTALL_URL (offline?)"
   [ -s "$NVM_DIR/nvm.sh" ] || die "the nvm install script did not create $NVM_DIR/nvm.sh"
@@ -80,13 +78,12 @@ load_nvm() {
   command -v nvm >/dev/null 2>&1 || die "$NVM_DIR/nvm.sh did not define nvm"
 }
 
-# A default Node.js (Node.js LTS on a fresh install), active in this process.
+# A default Node.js (Node.js LTS on a fresh install), active in this process
+# and linked from $NVM_DIR/default.
 ensure_node() {
-  local default
+  local default bin
   default=$(nvm_run version default 2>/dev/null || true)
-  if [[ $default == v* ]]; then
-    skip "Node.js $default is already nvm's default"
-  else
+  if [[ $default != v* ]]; then
     say "installing Node.js LTS with nvm"
     nvm_run install --lts --no-progress >/dev/null || die "nvm install --lts failed (offline?)"
     nvm_run alias default 'lts/*' >/dev/null || die "cannot make Node.js LTS nvm's default"
@@ -96,15 +93,14 @@ ensure_node() {
     "$NVM_DIR"/*) ;;
     *) die "npm does not come from nvm's default Node.js (got '$(command -v npm || true)')" ;;
   esac
+  bin=$(dirname "$(command -v npm)")
+  ln -sfn "$(dirname "$bin")" "$NVM_DIR/default" || die "cannot link $NVM_DIR/default to nvm's default Node.js"
 }
 
 ensure_pnpm() {
   local prefix
   prefix=$(npm prefix -g) || die "npm prefix -g failed"
-  if [ -x "$prefix/bin/pnpm" ]; then
-    skip "pnpm already installed in $prefix"
-    return 0
-  fi
+  [ ! -x "$prefix/bin/pnpm" ] || return 0
   say "installing pnpm with npm"
   npm install -g pnpm >/dev/null || die "npm install -g pnpm failed (offline?)"
   [ -x "$prefix/bin/pnpm" ] || die "npm installed pnpm without $prefix/bin/pnpm"
@@ -116,10 +112,7 @@ ensure_pnpm_global() {
   local bin=$1 dir
   shift
   dir=$(pnpm bin -g) || die "pnpm bin -g failed"
-  if [ -x "$dir/$bin" ]; then
-    skip "$bin already installed in $dir"
-    return 0
-  fi
+  [ ! -x "$dir/$bin" ] || return 0
   say "pnpm add -g $*"
   pnpm add -g "$@" >/dev/null || die "pnpm add -g $* failed (offline?)"
   [ -x "$dir/$bin" ] || die "pnpm add -g $* did not install $dir/$bin"

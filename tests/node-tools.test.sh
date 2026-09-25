@@ -13,15 +13,18 @@
 # Coverage:
 # - workstation, fresh HOME: nvm from its install script with PROFILE=/dev/null
 #   (no rc file touched), `nvm install --lts` as nvm's default, pnpm, then the
-#   three exact pnpm installs; a re-run installs nothing and prints nothing;
+#   three exact pnpm installs, with $NVM_DIR/default linked to nvm's default
+#   Node.js; a re-run installs nothing and prints nothing;
 # - container: only the pnpm installs, on the pnpm already on PATH; without
 #   pnpm, or offline, the script fails with one clear message;
 # - both profiles' nodeTools activation runs after writeBoundary with the
 #   right mode, only warns on failure so the switch completes, and the
 #   container activation keeps the user's PATH for the image's pnpm;
-# - the workstation zsh puts nvm's node, npm, and pnpm first on PATH; both
-#   profiles' zsh put pnpm's global bin (claude, pi, copilot) on PATH after
-#   ~/.nix-profile/bin; the container zsh does not load nvm.
+# - the workstation's interactive zsh puts nvm's node, npm, and pnpm first on
+#   PATH; in both profiles every zsh (interactive or not) and a bash login
+#   shell find pnpm's global bin (claude, pi, copilot) after
+#   ~/.nix-profile/bin, and on the workstation also nvm's default Node.js
+#   bin ($NVM_DIR/default/bin); the container never puts nvm on PATH.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -33,7 +36,7 @@ PI_ADD="pnpm add -g --ignore-scripts @earendil-works/pi-coding-agent"
 COPILOT_ADD="pnpm add -g @github/copilot"
 CLAUDE_ADD="pnpm add -g --allow-build=@anthropic-ai/claude-code @anthropic-ai/claude-code"
 export NODE_TOOLS_LOG="$TMP_ROOT/calls.log"
-unset NVM_DIR NVM_BIN NVM_INC PNPM_HOME XDG_DATA_HOME NODE_TOOLS_VERBOSE NPM_CONFIG_PREFIX
+unset NVM_DIR NVM_BIN NVM_INC PNPM_HOME XDG_DATA_HOME NPM_CONFIG_PREFIX
 
 # --- fakes --------------------------------------------------------------------
 
@@ -177,6 +180,7 @@ $PNPM_ADDS" ] || fail "workstation did not install nvm, Node.js LTS as default, 
   for tool in claude pi copilot; do
     [ "$("$bin/$tool" --version)" = "$tool-fake" ] || fail "$tool does not run from pnpm's global bin"
   done
+  [ "$("$home/.nvm/default/bin/node")" = "$FAKE_NODE" ] || fail "\$NVM_DIR/default is not nvm's default Node.js"
   for rc in .bashrc .bash_profile .profile .zshrc .zprofile; do
     [ ! -e "$home/$rc" ] || fail "the nvm installer wrote $rc, which Home Manager owns"
   done
@@ -185,9 +189,6 @@ $PNPM_ADDS" ] || fail "workstation did not install nvm, Node.js LTS as default, 
   out=$(run_tools "$home" workstation "$BASE_PATH") || fail "workstation re-run failed: $out"
   [ -z "$(calls)" ] || fail "a workstation re-run reinstalled something: $(calls)"
   [ -z "$out" ] || fail "a workstation re-run is not quiet: $out"
-  out=$(NODE_TOOLS_VERBOSE=1 run_tools "$home" workstation "$BASE_PATH") || fail "verbose re-run failed: $out"
-  assert_contains "$out" "Node.js $FAKE_NODE is already nvm's default" "verbose re-run does not report the default Node.js: $out"
-  assert_contains "$out" "claude already installed" "verbose re-run does not report claude: $out"
   pass "workstation: nvm (PROFILE=/dev/null), Node.js LTS as default, pnpm, then Claude Code, Pi, and Copilot from pnpm; re-runs install and print nothing"
 }
 
@@ -281,7 +282,7 @@ run_activation() {
 }
 
 test_activation() {
-  local out mode after empty home
+  local out after empty home
   have_linux_nix || return 0
   profiles_init
   # Realize the activation's tool PATH.
@@ -291,12 +292,10 @@ test_activation() {
     after=$(hm_eval --json "$ROOT#homeConfigurations.\"$profile\".config.home.activation.nodeTools.after")
     [ "$after" = '["writeBoundary"]' ] || fail "$profile: nodeTools does not run after writeBoundary: $after"
     empty=$(hm_eval --json "$ROOT#homeConfigurations.\"$profile\".config.home.emptyActivationPath")
-    out=$(hm_eval --raw "$ROOT#homeConfigurations.\"$profile\".config.home.activation.nodeTools.data")
     case "$profile" in
-      *@container-*) mode=container; [ "$empty" = false ] || fail "$profile: activation drops the image's PATH" ;;
-      *) mode=workstation; [ "$empty" = true ] || fail "$profile: workstation activation inherits the user's PATH" ;;
+      *@container-*) [ "$empty" = false ] || fail "$profile: activation drops the image's PATH" ;;
+      *) [ "$empty" = true ] || fail "$profile: workstation activation inherits the user's PATH" ;;
     esac
-    assert_contains "$out" "node-tools.sh $mode;" "$profile: nodeTools does not run node-tools.sh $mode: $out"
   done
 
   home="$TMP_ROOT/act-ws"
@@ -321,17 +320,27 @@ test_activation() {
   pass "nodeTools runs after writeBoundary in both profiles, uses the container's own pnpm, and only warns on failure"
 }
 
-# --- zsh --------------------------------------------------------------------------
+# --- shells ---------------------------------------------------------------------
 
-test_zsh_path() {
-  local files home out profile nix_idx pnpm_idx
+# Asserts that the PATH lines in $2 put $3 after ~/.nix-profile/bin ($1 is the
+# scratch HOME; $4 names the shell).
+assert_after_nix_profile() {
+  local home=$1 out=$2 dir=$3 shell=$4 nix_idx dir_idx
+  nix_idx=$(grep -nxF "$home/.nix-profile/bin" <<<"$out" | head -n1 | cut -d: -f1)
+  dir_idx=$(grep -nxF "$dir" <<<"$out" | head -n1 | cut -d: -f1)
+  [ -n "$nix_idx" ] && [ -n "$dir_idx" ] && [ "$nix_idx" -lt "$dir_idx" ] \
+    || fail "$shell: $dir is not after ~/.nix-profile/bin on PATH: $out"
+}
+
+test_shell_path() {
+  local files home out profile tool pnpm_bin node_bin shell
   have_linux_nix || return 0
   command -v zsh >/dev/null 2>&1 || { echo "skip: zsh not found"; return 0; }
   profiles_init
   for profile in "$WS" "$CT"; do
     files=$(nix build --no-link --print-out-paths "$ROOT#homeConfigurations.\"$profile\".config.home-files" 2>/dev/null) \
       || fail "$profile: home-files build failed"
-    home="$TMP_ROOT/zsh-${profile//[@\/]/-}"
+    home="$TMP_ROOT/sh-${profile//[@\/]/-}"
     mkdir -p "$home/.nix-profile/bin"
     case "$profile" in
       *@container-*) PNPM_HOME="$home/.local/share/pnpm" run_tools "$home" container "$FIX/pnpm-only:$BASE_PATH" >/dev/null ;;
@@ -339,36 +348,75 @@ test_zsh_path() {
     esac || fail "$profile: could not lay out the fake tools"
     # shellcheck disable=SC2016 # expanded by the scratch zsh, not here
     { cat "$files/.zshrc"; echo 'HISTFILE="$HOME/.zsh_history"'; } >"$home/.zshrc"
-    [ -e "$files/.zshenv" ] && cp -L "$files/.zshenv" "$home/.zshenv"
-    # -d skips the host's global rc files (a devcontainer's /etc/zsh/zshrc sets
-    # its own NVM_DIR), leaving only the generated ones.
+    cp -L "$files/.zshenv" "$home/.zshenv"
+    cp -L "$files/.bash_profile" "$home/.bash_profile"
+    pnpm_bin="$home/.local/share/pnpm/bin"
+    node_bin="$home/.nvm/default/bin"
+
+    # A fresh environment, as a new terminal or `wsl.exe -e` gets. zsh -d skips
+    # the host's global rc files (a devcontainer's /etc/zsh/zshrc sets its own
+    # NVM_DIR), leaving only the generated ones.
     # shellcheck disable=SC2016 # expanded by the scratch zsh, not here
-    out=$(HOME=$home ZDOTDIR=$home TERM=xterm PATH="$home/.nix-profile/bin:$BASE_PATH" \
+    out=$(env -i HOME="$home" ZDOTDIR="$home" TERM=xterm PATH="$home/.nix-profile/bin:$BASE_PATH" \
       zsh -d -i -c 'for c in node npm pnpm claude pi copilot; do print -r -- "$c=$(whence -p $c)"; done; print -rl -- $path' \
       </dev/null 2>/dev/null)
     for tool in claude pi copilot; do
-      assert_contains "$out" "$tool=$home/.local/share/pnpm/bin/$tool" "$profile: $tool is not pnpm's: $out"
+      assert_contains "$out" "$tool=$pnpm_bin/$tool" "$profile interactive zsh: $tool is not pnpm's: $out"
     done
-    nix_idx=$(grep -nxF "$home/.nix-profile/bin" <<<"$out" | cut -d: -f1)
-    pnpm_idx=$(grep -nxF "$home/.local/share/pnpm/bin" <<<"$out" | cut -d: -f1)
-    [ -n "$nix_idx" ] && [ -n "$pnpm_idx" ] && [ "$nix_idx" -lt "$pnpm_idx" ] \
-      || fail "$profile: pnpm's global bin is not after ~/.nix-profile/bin on PATH: $out"
+    assert_after_nix_profile "$home" "$out" "$pnpm_bin" "$profile interactive zsh"
     case "$profile" in
       *@container-*)
         assert_not_contains "$out" "$home/.nvm" "$profile: the container zsh loads nvm: $out"
         ;;
       *)
         for tool in node npm pnpm; do
-          assert_contains "$out" "$tool=$home/.nvm/versions/node/$FAKE_NODE/bin/$tool" "$profile: $tool is not nvm's: $out"
+          assert_contains "$out" "$tool=$home/.nvm/versions/node/$FAKE_NODE/bin/$tool" "$profile interactive zsh: $tool is not nvm's: $out"
         done
         ;;
     esac
+
+    # Shells that never read ~/.zshrc: a non-interactive zsh and a bash login
+    # shell. The bash login shell reads the host's /etc/profile, which may put
+    # its own copies first, so there each tool only has to be found somewhere
+    # on PATH at the expected place.
+    for shell in "zsh -c" "bash -l"; do
+      case "$shell" in
+        zsh*)
+          # shellcheck disable=SC2016 # expanded by the scratch zsh, not here
+          out=$(env -i HOME="$home" ZDOTDIR="$home" PATH="$home/.nix-profile/bin:$BASE_PATH" \
+            zsh -d -c 'for c in node npm pnpm claude pi copilot; do for p in $(whence -pa $c); do print -r -- "$c=$p"; done; done; print -rl -- $path' \
+            </dev/null 2>/dev/null)
+          ;;
+        bash*)
+          # shellcheck disable=SC2016 # expanded by the scratch bash, not here
+          out=$(env -i HOME="$home" PATH="$home/.nix-profile/bin:$BASE_PATH" \
+            bash -l -c 'for c in node npm pnpm claude pi copilot; do for p in $(type -aP $c); do echo "$c=$p"; done; done; tr : "\n" <<<"$PATH"' \
+            </dev/null 2>/dev/null)
+          ;;
+      esac
+      for tool in claude pi copilot; do
+        grep -qxF "$tool=$pnpm_bin/$tool" <<<"$out" || fail "$profile $shell: $tool is not pnpm's: $out"
+      done
+      assert_after_nix_profile "$home" "$out" "$pnpm_bin" "$profile $shell"
+      case "$profile" in
+        *@container-*)
+          assert_not_contains "$out" "$home/.nvm" "$profile $shell: the container puts nvm on PATH: $out"
+          ;;
+        *)
+          for tool in node npm pnpm; do
+            grep -qxF "$tool=$node_bin/$tool" <<<"$out" || fail "$profile $shell: $tool is not nvm's default: $out"
+          done
+          [ "$("$node_bin/node")" = "$FAKE_NODE" ] || fail "$profile $shell: $node_bin/node is not nvm's default Node.js"
+          assert_after_nix_profile "$home" "$out" "$node_bin" "$profile $shell"
+          ;;
+      esac
+    done
   done
-  pass "the workstation zsh loads nvm (node, npm, pnpm); both profiles put pnpm's claude, pi, and copilot on PATH after ~/.nix-profile/bin"
+  pass "both profiles put pnpm's claude, pi, and copilot on PATH after ~/.nix-profile/bin in interactive and non-interactive zsh and a bash login shell; the workstation adds nvm's default node, npm, and pnpm there, and its interactive zsh loads nvm"
 }
 
 test_workstation_fresh_then_quiet
 test_container_and_failures
 test_claude_must_run
 test_activation
-test_zsh_path
+test_shell_path

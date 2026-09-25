@@ -154,10 +154,11 @@ If pnpm or the network is unavailable, the switch prints a warning and still com
 
 Where pnpm itself comes from depends on the profile:
 
-- **WSL2 workstation**: the same activation first installs nvm with its official install script (`PROFILE=/dev/null`, so it never edits the Home Manager-owned `~/.zshrc` or `~/.bashrc`), then `nvm install --lts` as nvm's default, then `npm install -g pnpm`, the way [Microsoft's Node.js on WSL guide](https://learn.microsoft.com/en-us/windows/dev-environment/javascript/nodejs-on-wsl) does it. The workstation zsh loads nvm (`$NVM_DIR`, default `~/.nvm`), so `node`, `npm`, and `pnpm` are nvm's. As that guide advises, don't install another Node.js alongside it.
+- **WSL2 workstation**: the same activation first installs nvm with its official install script (`PROFILE=/dev/null`, so it never edits `~/.zshrc`, `~/.bashrc`, or `~/.profile`), then `nvm install --lts` as nvm's default, then `npm install -g pnpm`, the way [Microsoft's Node.js on WSL guide](https://learn.microsoft.com/en-us/windows/dev-environment/javascript/nodejs-on-wsl) does it. The interactive workstation zsh loads nvm (`$NVM_DIR`, default `~/.nvm`), so `node`, `npm`, and `pnpm` are nvm's there. Every switch also links `$NVM_DIR/default` to nvm's default Node.js, and `$NVM_DIR/default/bin` is on every shell's `PATH` (see below), so scripts and `wsl.exe -e zsh -c ...` find them without loading nvm; after `nvm alias default ...`, switch again to move that link. As that guide advises, don't install another Node.js alongside it.
 - **Devcontainer**: the image (`cloud-practitioner/agentic-devcontainer`) brings its own Node.js and pnpm (with `PNPM_HOME`), so the container profile has no nvm and its activation keeps the image's `PATH` to find them.
 
-Both profiles' zsh put pnpm's global bin directory (`$PNPM_HOME/bin`, default `~/.local/share/pnpm/bin`) at the end of `PATH`, after `~/.nix-profile/bin`.
+Both profiles set `PNPM_HOME` (unless already set, default `${XDG_DATA_HOME:-~/.local/share}/pnpm`, as pnpm itself) and put pnpm's global bin directory (`$PNPM_HOME/bin`) at the end of `PATH`, after `~/.nix-profile/bin`, preceded on the workstation by `$NVM_DIR/default/bin`.
+These are Home Manager session variables, so every zsh (through `~/.zshenv`, interactive or not) and every bash login shell (through the Home Manager-owned `~/.bash_profile`, which then reads your own `~/.profile`) gets them; a pre-existing `~/.bash_profile` blocks the switch until you merge it into `~/.profile` and remove it.
 A copy an image installs elsewhere on `PATH` comes first; for example the devcontainer image's own `~/.local/bin/claude` wins over the pnpm one.
 
 Apply changes the same way in each environment:

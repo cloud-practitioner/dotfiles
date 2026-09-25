@@ -43,7 +43,33 @@ in
     devcontainer
   ];
   fonts.fontconfig.enable = true;
-  home.sessionVariables.EDITOR = "nvim";
+  home.sessionVariables = {
+    EDITOR = "nvim";
+  } // lib.optionalAttrs pkgs.stdenv.isLinux {
+    # The same defaults as tools/node-tools.sh (and pnpm itself); an image's own
+    # PNPM_HOME wins.
+    PNPM_HOME = "\${PNPM_HOME:-\${XDG_DATA_HOME:-$HOME/.local/share}/pnpm}";
+  } // lib.optionalAttrs (pkgs.stdenv.isLinux && isWorkstation) {
+    NVM_DIR = "\${NVM_DIR:-$HOME/.nvm}";
+  };
+  # Every Linux shell, not just interactive zsh, finds pnpm's global bins
+  # (Claude Code, Pi, GitHub Copilot CLI) at the end of PATH, after
+  # ~/.nix-profile/bin (herdr): $PNPM_HOME/bin for pnpm 11+, $PNPM_HOME for
+  # older pnpm. On the workstation, $NVM_DIR/default/bin (nvm's default
+  # Node.js, npm, and pnpm, linked by tools/node-tools.sh) comes just before
+  # them; the interactive zsh then loads nvm itself.
+  home.sessionVariablesExtra = lib.mkIf pkgs.stdenv.isLinux ''
+    export PATH="''${PATH:+$PATH:}${lib.optionalString isWorkstation "$NVM_DIR/default/bin:"}$PNPM_HOME/bin:$PNPM_HOME"
+  '';
+  # zsh reads the session variables from ~/.zshenv. A bash login shell reads
+  # them here, then the distro's own ~/.profile (and through it ~/.bashrc),
+  # which Home Manager leaves alone.
+  home.file.".bash_profile" = lib.mkIf pkgs.stdenv.isLinux {
+    text = ''
+      . "${config.home.sessionVariablesPackage}/etc/profile.d/hm-session-vars.sh"
+      [ -f "$HOME/.profile" ] && . "$HOME/.profile"
+    '';
+  };
 
   # Claude Code, Pi, and the GitHub Copilot CLI, unpinned from pnpm, at every
   # Linux switch when missing (tools/node-tools.sh). The WSL2 workstation first
@@ -54,7 +80,7 @@ in
     lib.hm.dag.entryAfter [ "writeBoundary" ] ''
       if ! run env PATH="${lib.makeBinPath (with pkgs; [
           bash coreutils curl findutils gawk git gnugrep gnused gnutar gzip xz
-        ])}:$PATH" NODE_TOOLS_VERBOSE="''${VERBOSE:+1}" \
+        ])}:$PATH" \
         ${pkgs.bash}/bin/bash ${./tools/node-tools.sh} ${if isWorkstation then "workstation" else "container"}; then
         warnEcho "tools/node-tools.sh failed (see above): ${if isWorkstation then "nvm, Node.js, pnpm, " else ""}Claude Code, Pi, or the GitHub Copilot CLI may be missing. Fix that, then switch again."
       fi
@@ -125,7 +151,6 @@ in
       # nvm (installed by the nodeTools activation, tools/node-tools.sh) puts
       # its default Node.js, npm, and pnpm first on PATH. Containers skip this:
       # the devcontainer image brings its own Node.js and pnpm.
-      export NVM_DIR="''${NVM_DIR:-$HOME/.nvm}"
       [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 
       # The systemd ssh-agent starts empty; when it is reachable but has no
@@ -142,14 +167,6 @@ in
           trap - INT
         fi
       fi
-    '' + lib.optionalString pkgs.stdenv.isLinux ''
-
-      # pnpm's global bin directory (Claude Code, Pi, GitHub Copilot CLI) goes
-      # last on PATH, after ~/.nix-profile/bin (which provides herdr).
-      # pnpm 11+ puts global bins in $PNPM_HOME/bin, older pnpm in $PNPM_HOME.
-      export PNPM_HOME="''${PNPM_HOME:-$HOME/.local/share/pnpm}"
-      path=(''${path:#$PNPM_HOME/bin} $PNPM_HOME/bin)
-      path=(''${path:#$PNPM_HOME} $PNPM_HOME)
     '';
     shellAliases = {
       ".." = "cd ..";
