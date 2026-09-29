@@ -270,8 +270,10 @@ activation also installs the Claude files there:
   files Claude reads.
 - Skills move one way: each entry of a real `~/.claude/skills` directory moves
   into `$CLAUDE_CONFIG_DIR/skills` unless that name already exists there, in
-  which case it stays put with a warning. Once `~/.claude/skills` is empty it
-  becomes a link to `$CLAUDE_CONFIG_DIR/skills`, so later installs land there.
+  which case it stays put with a warning. A link that reaches the same skill as
+  the existing entry, as a container rebuild re-creates them, is a duplicate
+  and is removed instead. Once `~/.claude/skills` is empty it becomes a link
+  to `$CLAUDE_CONFIG_DIR/skills`, so later installs land there.
   A skill a tool later installs through it as a relative link (as the
   `skills` CLI does) resolves against `$CLAUDE_CONFIG_DIR/skills` and may
   dangle; re-install it or link it by absolute path.
