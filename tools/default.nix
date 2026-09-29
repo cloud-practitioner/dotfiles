@@ -2,8 +2,8 @@
 # build, so every Linux home profile gets the same pinned version.
 # sources.json holds the pin (version, URL, and vendor-published SHA-256);
 # bump it with `nix run .#update-tools` (update.sh). Claude Code, Pi, and the
-# GitHub Copilot CLI are not pinned here: home.nix installs them unpinned with
-# pnpm (node-tools.sh).
+# GitHub Copilot CLI are not pinned here: home.nix installs them unpinned
+# (node-tools.sh).
 { lib, callPackage }:
 
 let

@@ -15,10 +15,11 @@ let
   };
   # Moves these PATH entries right after ~/.nix-profile/bin (herdr), or to the
   # front without it, once each, so they win over the system's and WSL's
-  # Windows-interop (/mnt/*) copies: pnpm's global bins (Claude Code, Pi,
-  # GitHub Copilot CLI; $PNPM_HOME/bin for pnpm 11+, $PNPM_HOME for older
-  # pnpm) and, on the workstation first, $NVM_DIR/default/bin (nvm's default
-  # Node.js, npm, and pnpm, linked by tools/node-tools.sh). It sets PNPM_HOME
+  # Windows-interop (/mnt/*) copies: ~/.local/bin first (Claude Code's native
+  # launcher, ahead of any npm or pnpm copy), then, on the workstation,
+  # $NVM_DIR/default/bin (nvm's default Node.js, npm, and pnpm, linked by
+  # tools/node-tools.sh), then pnpm's global bins (Pi, GitHub Copilot CLI;
+  # $PNPM_HOME/bin for pnpm 11+, $PNPM_HOME for older pnpm). It sets PNPM_HOME
   # and NVM_DIR itself, with the same defaults as tools/node-tools.sh (and
   # pnpm): an image's own PNPM_HOME wins.
   nodePath = pkgs.writeText "node-tools-path.sh" (''
@@ -26,7 +27,7 @@ let
   '' + lib.optionalString isWorkstation ''
     export NVM_DIR="''${NVM_DIR:-$HOME/.nvm}"
   '' + ''
-    __nt_front="${lib.concatStringsSep ":" (lib.optional isWorkstation "$NVM_DIR/default/bin" ++ [ "$PNPM_HOME/bin" "$PNPM_HOME" ])}"
+    __nt_front="${lib.concatStringsSep ":" ([ "$HOME/.local/bin" ] ++ lib.optional isWorkstation "$NVM_DIR/default/bin" ++ [ "$PNPM_HOME/bin" "$PNPM_HOME" ])}"
     __nt_rest="$PATH:"
     __nt_path=
     __nt_placed=
@@ -68,8 +69,7 @@ in
     wezterm
     # herdr's vendor release pinned in tools/ (flake.nix overlay), the same in
     # both Linux profiles. Claude Code, Pi, and the GitHub Copilot CLI are not
-    # Nix packages: the nodeTools activation below installs them unpinned with
-    # pnpm.
+    # Nix packages: the nodeTools activation below installs them unpinned.
     upstream-tools.herdr
   ] ++ lib.optionals (stdenv.isLinux && isWorkstation) [
     # Build/run devcontainers from the CLI; needs a Docker host.
@@ -91,11 +91,12 @@ in
     '';
   };
 
-  # Claude Code, Pi, and the GitHub Copilot CLI, unpinned from pnpm, at every
-  # Linux switch when missing (tools/node-tools.sh). The WSL2 workstation first
-  # gets nvm, Node.js LTS as nvm's default, and pnpm; a container uses its
-  # image's Node.js and pnpm. A failure (no pnpm, offline) only warns, so the
-  # switch still completes; the next switch retries.
+  # Pi and the GitHub Copilot CLI, unpinned from pnpm, and Claude Code from its
+  # native installer, at every Linux switch when missing
+  # (tools/node-tools.sh). The WSL2 workstation first gets nvm, Node.js LTS as
+  # nvm's default, and pnpm; a container uses its image's Node.js and pnpm. A
+  # failure (no pnpm, offline) only warns, so the switch still completes; the
+  # next switch retries.
   home.activation.nodeTools = lib.mkIf pkgs.stdenv.isLinux (
     lib.hm.dag.entryAfter [ "writeBoundary" ] ''
       if ! run env PATH="${lib.makeBinPath (with pkgs; [

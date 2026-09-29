@@ -1,23 +1,25 @@
 #!/usr/bin/env bash
-# The Node.js-based CLIs that Home Manager installs at switch time on Linux
+# The unpinned agent CLIs that Home Manager installs at switch time on Linux
 # (home.nix `home.activation`), outside the Nix store:
 #
 # - workstation (WSL2): nvm from its official install script, then Node.js LTS
 #   with npm as nvm's default, then pnpm, the way Microsoft's Node.js on WSL
 #   guide does it
 #   (https://learn.microsoft.com/en-us/windows/dev-environment/javascript/nodejs-on-wsl),
-#   then the pnpm tools below on that Node.js;
+#   then the pnpm tools below on that Node.js, then Claude Code;
 # - container: only the pnpm tools, on the devcontainer image's own Node.js and
-#   pnpm.
+#   pnpm, then Claude Code.
 #
-# The pnpm tools are unpinned, so their own updaters keep them current:
+# All are unpinned, so their own updaters keep them current:
 #   pnpm add -g --ignore-scripts @earendil-works/pi-coding-agent   (Pi)
 #   pnpm add -g @github/copilot                                    (GitHub Copilot CLI)
-#   pnpm add -g @anthropic-ai/claude-code                          (Claude Code)
-# pnpm blocks dependency build scripts by default. Claude Code's own
-# postinstall fetches its native binary, so exactly that one is allowed
-# (--allow-build); Pi and Copilot run without any. Each CLI must answer
-# `--version` after it is installed.
+#   curl -fsSL https://claude.ai/install.sh | bash                 (Claude Code)
+# pnpm blocks dependency build scripts by default, and Pi and Copilot run
+# without any. Claude Code comes from its native installer, not pnpm: its
+# updater only knows npm and native installs, so it would put every update of
+# a pnpm copy into npm's global prefix instead. The native launcher is always
+# ~/.local/bin/claude, which its updater re-points in place. Each CLI must
+# answer `--version` after it is installed.
 #
 # On the workstation it also points $NVM_DIR/default at nvm's default Node.js,
 # so shells that do not load nvm (home.nix puts $NVM_DIR/default/bin on PATH)
@@ -28,12 +30,13 @@
 # turns that into a warning so the switch still completes.
 # Usage: tools/node-tools.sh workstation|container
 # NVM_DIR (default ~/.nvm), PNPM_HOME (default ${XDG_DATA_HOME:-~/.local/share}/pnpm,
-# as pnpm itself), and NVM_INSTALL_URL can be overridden; the tests point them
-# at local fixtures.
+# as pnpm itself), NVM_INSTALL_URL, and CLAUDE_INSTALL_URL can be overridden;
+# the tests point them at local fixtures.
 set -euo pipefail
 
 NVM_VERSION=v0.40.8
 NVM_INSTALL_URL=${NVM_INSTALL_URL:-https://raw.githubusercontent.com/nvm-sh/nvm/$NVM_VERSION/install.sh}
+CLAUDE_INSTALL_URL=${CLAUDE_INSTALL_URL:-https://claude.ai/install.sh}
 # home.nix sets the same defaults for the shells (nodePath).
 export NVM_DIR=${NVM_DIR:-$HOME/.nvm}
 export PNPM_HOME=${PNPM_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/pnpm}
@@ -119,6 +122,18 @@ ensure_pnpm_global() {
   "$dir/$bin" --version >/dev/null 2>&1 </dev/null || die "$dir/$bin --version fails after pnpm add -g $*"
 }
 
+# Claude Code from its native installer, unless its launcher is already there.
+ensure_claude() {
+  local bin=$HOME/.local/bin/claude
+  [ ! -x "$bin" ] || return 0
+  command -v curl >/dev/null 2>&1 || die "curl is required to install Claude Code"
+  say "installing Claude Code with its native installer"
+  curl -fsSL --proto-redir '=https' "$CLAUDE_INSTALL_URL" | bash >/dev/null \
+    || die "cannot install Claude Code from $CLAUDE_INSTALL_URL (offline?)"
+  [ -x "$bin" ] || die "the Claude Code installer did not create $bin"
+  "$bin" --version >/dev/null 2>&1 </dev/null || die "$bin --version fails after the Claude Code installer"
+}
+
 main() {
   case "${1:-}" in
     workstation)
@@ -142,7 +157,7 @@ main() {
   export PATH="$PNPM_HOME/bin:$PNPM_HOME:$PATH"
   ensure_pnpm_global pi --ignore-scripts @earendil-works/pi-coding-agent
   ensure_pnpm_global copilot @github/copilot
-  ensure_pnpm_global claude --allow-build=@anthropic-ai/claude-code @anthropic-ai/claude-code
+  ensure_claude
 }
 
 main "$@"

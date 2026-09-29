@@ -6,7 +6,7 @@
 # - both Linux home profiles (workstation and container) for this machine's
 #   system install exactly the pinned herdr build from tools/sources.json, and
 #   no Nix-built Claude Code or Pi (Home Manager installs those, and the GitHub
-#   Copilot CLI, with pnpm; tests/node-tools.test.sh covers that);
+#   Copilot CLI, unpinned; tests/node-tools.test.sh covers that);
 # - the built profiles' herdr reports the pinned version and refuses to
 #   self-update;
 # - `update-tools` rewrites the version, URLs, and hashes from a vendor-shaped
