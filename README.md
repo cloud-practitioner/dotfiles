@@ -203,6 +203,25 @@ by its `Host` pattern and uses OpenSSH's own directive names (`HostName`,
 config keeps. `bash tests/ssh-config.test.sh` checks the generated
 `~/.ssh/config` and that no profile evaluates with a Home Manager warning.
 
+### Secrets (Linux)
+
+Nix doesn't manage secrets, but every zsh on Linux, including non-interactive
+`zsh -c` shells, exports the credentials you keep in `*.env` files under
+`/workspaces/*/.secrets/` (the devcontainer's persistent mount) or
+`~/.secrets/`, e.g. `export NO_MISTAKES_BITBUCKET_API_TOKEN=...`. Files load in
+name order, silently. The rules:
+
+- The `.secrets` folder must be a real directory (not a symlink) that you own
+  and that group and others cannot access: `chmod 700 .secrets`. Any other
+  folder is ignored, so a `.secrets` folder that `git` checks out under
+  `/workspaces` (mode 755) never loads.
+- Each `*.env` file must be a regular file (not a symlink) that you own and that
+  group and others cannot write; use `chmod 600`.
+- A file with a syntax error is skipped whole, and nothing a file prints is
+  ever shown.
+
+`bash tests/secrets-env.test.sh` checks these rules.
+
 ### Devcontainers
 
 `home.nix` takes a `profile` argument. The `container` profile reuses everything
