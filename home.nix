@@ -122,6 +122,30 @@ in
     syntaxHighlighting.enable = true;  # commands turn green when valid
     envExtra = lib.optionalString pkgs.stdenv.isLinux ''
       . ${nodePath}
+      # Loads credentials kept out of this repo, such as Bitbucket's for the
+      # no-mistakes daemon, which inherits the environment of whichever
+      # shell starts it.
+      # A /workspaces/*/.secrets (the devcontainer's persistent mount) or
+      # ~/.secrets folder counts only if it is a real directory we own that
+      # group and others cannot access (chmod 700), so a .secrets folder git
+      # checks out (mode 755) is ignored. Each *.env file in one is loaded
+      # in name order if it is a regular file we own that neither group nor
+      # others can write; anything else, or a file that fails, is skipped
+      # silently.
+      () {
+        local d f
+        for d in /workspaces/*/.secrets(N/U^AIERWX) $HOME/.secrets(N/U^AIERWX); do
+          for f in $d/*.env(N.U^IW); do
+            # Parse the whole file first, so one with a syntax error is
+            # skipped outright rather than half applied.
+            { eval "__secrets_parse() { $(<$f)
+            }" } >/dev/null 2>&1 || continue
+            unfunction __secrets_parse
+            . "$f" >/dev/null 2>&1
+          done
+        done
+        return 0
+      }
     '';
     initContent = ''
       bindkey '^f' autosuggest-accept
