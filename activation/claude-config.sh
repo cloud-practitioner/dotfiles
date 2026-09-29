@@ -29,10 +29,12 @@
 #     edit the file Claude reads instead of the dotfiles checkout.
 #   - skills: a one-way move. Each entry of a real ~/.claude/skills directory
 #     moves into $CLAUDE_CONFIG_DIR/skills unless that name already exists
-#     there; a clash stays where it is, with a warning. Once ~/.claude/skills is
-#     empty (or absent) it becomes a link to $CLAUDE_CONFIG_DIR/skills, so later
-#     installs (no-mistakes init) land there. A ~/.claude/skills that is already
-#     a link is left alone.
+#     there. A link reaching the same skill as that existing entry (as an image
+#     rebuild re-creates them) is a duplicate and is removed; any other clash
+#     stays where it is, with a warning. Once ~/.claude/skills is empty (or
+#     absent) it becomes a link to $CLAUDE_CONFIG_DIR/skills, so later installs
+#     (no-mistakes init) land there. A ~/.claude/skills that is already a link
+#     is left alone.
 #
 # unlink (before checkLinkTargets): removes the two re-pointed ~/.claude links
 # again, and only while they still point where install left them, so Home
@@ -40,8 +42,9 @@
 # else.
 #
 # A real file or directory in the configured directory is never overwritten,
-# moved or deleted, and a real file where a ~/.claude link belongs is left in
-# place with a warning. Re-running is a no-op.
+# moved or deleted, a real one in ~/.claude/skills is only ever moved, and a
+# real file where a ~/.claude link belongs is left in place with a warning.
+# Re-running is a no-op.
 set -euo pipefail
 
 log() { printf 'claude-config: %s\n' "$*"; }
@@ -166,6 +169,23 @@ moved_link_target() {
   printf '%s/%s\n' "$(realpath -m -- "$(dirname -- "$target")")" "${target##*/}"
 }
 
+# Remove the link $1 when $2 reaches the same file without going through $1,
+# as when an image rebuild re-creates a skill link an earlier run already moved.
+# $1 is first moved aside and checked from there, and put back if $2 then
+# reaches something else (or nothing); a real file or directory is never removed.
+drop_duplicate_link() {
+  local link=$1 other=$2 aside
+  [ -L "$link" ] && [ "$link" -ef "$other" ] || return 1
+  aside=$(mktemp -u "$(dirname -- "$link")/.dup.XXXXXX")
+  mv -T -- "$link" "$aside"
+  if [ "$other" -ef "$aside" ]; then
+    rm -f -- "$aside"
+    return 0
+  fi
+  mv -T -- "$aside" "$link"
+  return 1
+}
+
 adopt_skills() {
   local home_skills=$1 dest=$2 entry name kept=0
   if [ -L "$home_skills" ]; then
@@ -186,6 +206,10 @@ adopt_skills() {
       [ -e "$entry" ] || [ -L "$entry" ] || continue
       name=${entry##*/}
       if [ -e "$dest/$name" ] || [ -L "$dest/$name" ]; then
+        if drop_duplicate_link "$entry" "$dest/$name"; then
+          log "removed $entry: $dest/$name already reaches the same skill"
+          continue
+        fi
         kept=1
         warn "kept $entry: $dest/$name already exists"
         continue

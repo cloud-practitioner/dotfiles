@@ -26,7 +26,9 @@
 # - edge cases: absent/invalid/symlinked owner settings, hook already present,
 #   foreign files in Home Manager's way;
 # - skills: a one-way, one-time move; a name clash stays in place with a
-#   warning and keeps ~/.claude/skills a directory, a ~/.claude/skills that is
+#   warning and keeps ~/.claude/skills a directory, unless it is a link that
+#   reaches the same skill (an image rebuild's re-created links), which is
+#   dropped as a duplicate; a ~/.claude/skills that is
 #   already a link is left alone, and a moved skill link still reads however
 #   its target was written (relative, or absolute through a symlinked directory
 #   or through ~/.claude/skills itself);
@@ -458,3 +460,58 @@ assert_link "$H/.claude/skills" "$C/skills" "moved links: ~/.claude/skills becom
 [ "$(cat "$C/skills/relslash/SKILL.md" 2>&1)" = relslash ] || fail "moved links: relative target with a trailing slash still reads"
 [ "$(cat "$C/skills/absslash/SKILL.md" 2>&1)" = absslash ] || fail "moved links: absolute target with trailing slashes still reads"
 pass "a moved skill link still reaches what it reached before the move"
+
+# A container rebuild: the image leaves a real ~/.claude/skills of relative
+# links whose names an earlier create already moved into the configured
+# skills. A link there that reaches the same skill is a duplicate and goes, so
+# ~/.claude/skills becomes the link; a link reaching another skill, a real
+# directory, and a link the configured entry reaches it through all stay.
+new_case
+mkdir -p "$H/.agents/skills/arc" "$H/.agents/skills/theirs" "$H/.agents/skills/back" "$TMP_ROOT/$CASE/owner/theirs"
+printf 'arc\n' >"$H/.agents/skills/arc/SKILL.md"
+printf 'image theirs\n' >"$H/.agents/skills/theirs/SKILL.md"
+printf 'back\n' >"$H/.agents/skills/back/SKILL.md"
+printf 'owner theirs\n' >"$TMP_ROOT/$CASE/owner/theirs/SKILL.md"
+image_skills() {
+  rm -rf "$H/.claude/skills"
+  mkdir -p "$H/.claude/skills"
+  ln -s ../../.agents/skills/arc "$H/.claude/skills/arc"
+}
+image_skills
+activate "$C"
+assert_link "$H/.claude/skills" "$C/skills" "rebuild: the first create links ~/.claude/skills"
+assert_link "$C/skills/arc" "$H/.agents/skills/arc" "rebuild: the first create moves the image link"
+image_skills
+activate "$C"
+assert_link "$H/.claude/skills" "$C/skills" "rebuild: a same-target duplicate does not keep ~/.claude/skills a directory"
+assert_link "$C/skills/arc" "$H/.agents/skills/arc" "rebuild: the configured link is kept"
+[ "$(cat "$C/skills/arc/SKILL.md")" = arc ] || fail "rebuild: the skill still reads"
+assert_contains "$OUT" "removed $H/.claude/skills/arc" "rebuild: the duplicate's removal is reported"
+assert_not_contains "$OUT" "warning:" "rebuild: a duplicate is not a clash"
+mkdir -p "$H/.claude/skills/no-mistakes"
+[ -d "$C/skills/no-mistakes" ] || fail "rebuild: a later install lands in the configured skills"
+activate "$C"
+[ "$OUT" = "claude-config: linked $H/.claude/settings.json -> $C/settings.json" ] || fail "rebuild: a re-run is a no-op, got: $OUT"
+pass "rebuild: an image link duplicating a configured one is dropped and ~/.claude/skills linked"
+
+image_skills
+ln -s ../../.agents/skills/theirs "$H/.claude/skills/theirs"
+ln -s "$TMP_ROOT/$CASE/owner/theirs" "$C/skills/theirs"
+mkdir -p "$H/.claude/skills/real"
+printf 'real\n' >"$H/.claude/skills/real/SKILL.md"
+ln -s "$H/.claude/skills/real" "$C/skills/real"
+ln -s ../../.agents/skills/back "$H/.claude/skills/back"
+ln -s "$H/.claude/skills/back" "$C/skills/back"
+activate "$C"
+activate "$C"
+[ -d "$H/.claude/skills" ] && [ ! -L "$H/.claude/skills" ] || fail "rebuild clash: ~/.claude/skills stays a directory"
+[ ! -e "$H/.claude/skills/arc" ] && [ ! -L "$H/.claude/skills/arc" ] || fail "rebuild clash: the duplicate still goes"
+assert_link "$H/.claude/skills/theirs" ../../.agents/skills/theirs "rebuild clash: a link reaching another skill is kept"
+[ "$(cat "$C/skills/theirs/SKILL.md")" = "owner theirs" ] || fail "rebuild clash: the configured skill is untouched"
+[ "$(cat "$C/skills/real/SKILL.md" 2>&1)" = real ] && [ ! -L "$H/.claude/skills/real" ] || fail "rebuild clash: a real directory the configured link reaches is kept"
+assert_link "$H/.claude/skills/back" ../../.agents/skills/back "rebuild clash: a link the configured link goes through is kept"
+[ "$(cat "$C/skills/back/SKILL.md" 2>&1)" = back ] || fail "rebuild clash: the configured link still reads, without a loop"
+for name in theirs real back; do
+  assert_contains "$OUT" "warning: kept $H/.claude/skills/$name" "rebuild clash: $name reported"
+done
+pass "rebuild: genuine clashes stay in place with a warning while duplicates go"
