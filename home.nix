@@ -122,6 +122,25 @@ in
     syntaxHighlighting.enable = true;  # commands turn green when valid
     envExtra = lib.optionalString pkgs.stdenv.isLinux ''
       . ${nodePath}
+      # Credentials such as Bitbucket's for the no-mistakes daemon, which
+      # inherits the environment of whichever shell starts it. They live
+      # outside any repo, in /workspaces/*/.secrets (the devcontainer's
+      # persistent mount) or ~/.secrets, never here. Every *.env file there
+      # is loaded in name order if it is a regular file we own that neither
+      # group nor others can write; anything else, or a file that fails, is
+      # skipped silently.
+      () {
+        local f
+        for f in /workspaces/*/.secrets/*.env(N.U^IW) $HOME/.secrets/*.env(N.U^IW); do
+          # Parse the whole file first, so one with a syntax error is
+          # skipped outright rather than half applied.
+          { eval "__secrets_parse() { $(<$f)
+          }" } >/dev/null 2>&1 || continue
+          unfunction __secrets_parse
+          . "$f" >/dev/null 2>&1
+        done
+        return 0
+      }
     '';
     initContent = ''
       bindkey '^f' autosuggest-accept
