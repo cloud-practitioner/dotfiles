@@ -30,6 +30,7 @@ SYSTEM=$(nix eval --impure --raw --expr builtins.currentSystem)
 [ "$(id -u)" -ne 0 ] && AS_USER=1 || AS_USER=
 
 VARS=(GOOD ORDER NOISY AFTER_SYNTAX SYNTAX GROUPW WORLDW LINK UNREADABLE TXT)
+# shellcheck disable=SC2016
 PROBE='
   for v in '"${VARS[*]}"'; do
     print -r -- "$v=$(printenv DOTFILES_SECRET_$v || print unset)"
@@ -118,6 +119,7 @@ probe_profile() {
   mkdir -m 700 "$home/.secrets"
   local s="$home/.secrets"
   env_file "$s/10-good.env" 600 'export DOTFILES_SECRET_GOOD=good'
+  # shellcheck disable=SC2016
   env_file "$s/20-order.env" 600 'export DOTFILES_SECRET_ORDER="$DOTFILES_SECRET_GOOD-then-order"'
   env_file "$s/30-noisy.env" 644 'echo hi; echo err >&2; print -u2 again
 export DOTFILES_SECRET_NOISY=loaded'
