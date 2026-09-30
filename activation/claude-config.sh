@@ -29,9 +29,13 @@
 #     edit the file Claude reads instead of the dotfiles checkout.
 #   - skills: a one-way move. Each entry of a real ~/.claude/skills directory
 #     moves into $CLAUDE_CONFIG_DIR/skills unless that name already exists
-#     there. A link reaching the same skill as that existing entry (as an image
-#     rebuild re-creates them) is a duplicate and is removed; any other clash
-#     stays where it is, with a warning. Once ~/.claude/skills is empty (or
+#     there. When it does, a link (never a real file or directory) that cannot
+#     be the skill to keep goes: a dangling ~/.claude one is removed; a dangling
+#     configured one is replaced by the ~/.claude entry, as is a configured one
+#     that reaches the skill only through that entry; a ~/.claude link reaching
+#     the same skill (as an image rebuild re-creates them) is a duplicate and is
+#     removed. Only a clash between two live, different skills stays where it
+#     is, with a warning. Once ~/.claude/skills is empty (or
 #     absent) it becomes a link to $CLAUDE_CONFIG_DIR/skills, so later installs
 #     (no-mistakes init) land there. A ~/.claude/skills that is already a link
 #     is left alone.
@@ -200,19 +204,33 @@ adopt_skills() {
     return 0
   fi
   mkdir -p -- "$dest"
+  # The owner linked the configured skills back to ~/.claude/skills: one directory.
+  [ "$dest" -ef "$home_skills" ] && return 0
 
   if [ -d "$home_skills" ]; then
     for entry in "$home_skills"/* "$home_skills"/.[!.]*; do
       [ -e "$entry" ] || [ -L "$entry" ] || continue
       name=${entry##*/}
       if [ -e "$dest/$name" ] || [ -L "$dest/$name" ]; then
-        if drop_duplicate_link "$entry" "$dest/$name"; then
+        if [ ! -e "$entry" ]; then
+          rm -f -- "$entry"
+          log "removed $entry: a dangling link, and $dest/$name already exists"
+          continue
+        elif [ ! -e "$dest/$name" ]; then
+          rm -f -- "$dest/$name"
+          log "replaced $dest/$name: a dangling link"
+        elif drop_duplicate_link "$entry" "$dest/$name"; then
           log "removed $entry: $dest/$name already reaches the same skill"
           continue
+        elif [ -L "$dest/$name" ] && [ "$dest/$name" -ef "$entry" ]; then
+          # The configured link reaches the skill only through $entry.
+          rm -f -- "$dest/$name"
+          log "replaced $dest/$name: it reached the skill through $entry"
+        else
+          kept=1
+          warn "kept $entry: $dest/$name already exists"
+          continue
         fi
-        kept=1
-        warn "kept $entry: $dest/$name already exists"
-        continue
       fi
       if [ -L "$entry" ]; then
         ln -s -- "$(moved_link_target "$entry")" "$dest/$name"
