@@ -34,8 +34,6 @@
       # Standalone home-manager for Linux. nix-darwin is macOS-only, so on Linux
       # we apply just the user-level config (home.nix) instead. allowUnfree is
       # set here because it lives in configuration.nix, which Linux never loads.
-      # The overlay adds `upstream-tools`: herdr built from its vendor's pinned
-      # release (tools/), the same in every Linux profile.
       # `profile` selects between a full workstation and a devcontainer that
       # reuses the same shell/tools but no host SSH machinery.
       mkLinuxHome = { system, user, profile ? "workstation" }:
@@ -43,7 +41,6 @@
           pkgs = import nixpkgs {
             inherit system;
             config.allowUnfree = true;
-            overlays = [ (final: _prev: { upstream-tools = final.callPackage ./tools { }; }) ];
           };
           extraSpecialArgs = { inherit user profile; };
           modules = [ ./home.nix ];
@@ -86,24 +83,5 @@
       # bootstrap.sh / rebuild.sh / post-create.sh (in
       # cloud-practitioner/agentic-devcontainer) select one by `id -un` + arch.
       homeConfigurations = workstationConfigs // containerConfigs;
-
-      # `nix run .#update-tools [-- --dry-run]` bumps every pin in
-      # tools/sources.json to the vendors' latest releases (today only herdr).
-      apps = lib.genAttrs linuxSystems (system:
-        let
-          pkgs = nixpkgs.legacyPackages.${system};
-          update-tools = pkgs.writeShellApplication {
-            name = "update-tools";
-            runtimeInputs = with pkgs; [ coreutils curl jq ];
-            text = builtins.readFile ./tools/update.sh;
-          };
-        in
-        {
-          update-tools = {
-            type = "app";
-            program = lib.getExe update-tools;
-            meta.description = "Bump the herdr pin to the latest upstream release";
-          };
-        });
     };
 }

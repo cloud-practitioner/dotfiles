@@ -2,18 +2,20 @@
 # The unpinned agent CLIs that Home Manager installs at switch time on Linux
 # (home.nix `home.activation`), outside the Nix store:
 #
+# - both profiles: herdr first, since it needs no Node.js;
 # - workstation (WSL2): nvm from its official install script, then Node.js LTS
 #   with npm as nvm's default, then pnpm, the way Microsoft's Node.js on WSL
 #   guide does it
 #   (https://learn.microsoft.com/en-us/windows/dev-environment/javascript/nodejs-on-wsl),
-#   then the tools below on that Node.js;
-# - container: only the tools below, on the devcontainer image's own Node.js
-#   and pnpm.
+#   then the other tools below on that Node.js;
+# - container: only the other tools below, on the devcontainer image's own
+#   Node.js and pnpm.
 #
 # pnpm installs none of these tools; it only removes the copies that an older
 # switch installed with it.
 #
 # All are unpinned, so their own updaters keep them current:
+#   curl -fsSL https://herdr.dev/install.sh | sh       (herdr)
 #   curl -fsSL https://pi.dev/install.sh | sh          (Pi)
 #   curl -fsSL https://gh.io/copilot-install | bash    (GitHub Copilot CLI)
 #   curl -fsSL https://claude.ai/install.sh | bash     (Claude Code)
@@ -22,6 +24,9 @@
 # installers get ~/.local/bin first on their PATH and run without a
 # controlling terminal (setsid), so they never prompt or edit a shell rc file.
 #
+# herdr's installer puts its static release binary, checked against the
+# SHA-256 in herdr's release manifest, at $HERDR_INSTALL_DIR/herdr, here
+# ~/.local/bin/herdr, which `herdr update` replaces in place.
 # Pi's installer makes a Pi-managed install (pinned dependencies, updated by
 # `pi update`) under ~/.pi/agent/install (or $PI_CODING_AGENT_DIR/install),
 # with its launcher in the bin directory beside it linked from ~/.local/bin/pi.
@@ -44,12 +49,14 @@
 # turns that into a warning so the switch still completes.
 # Usage: tools/node-tools.sh workstation|container
 # NVM_DIR (default ~/.nvm), PNPM_HOME (default ${XDG_DATA_HOME:-~/.local/share}/pnpm,
-# as pnpm itself), NVM_INSTALL_URL, PI_INSTALL_URL, COPILOT_INSTALL_URL, and
-# CLAUDE_INSTALL_URL can be overridden; the tests point them at local fixtures.
+# as pnpm itself), NVM_INSTALL_URL, HERDR_INSTALL_URL, PI_INSTALL_URL,
+# COPILOT_INSTALL_URL, and CLAUDE_INSTALL_URL can be overridden; the tests
+# point them at local fixtures.
 set -euo pipefail
 
 NVM_VERSION=v0.40.8
 NVM_INSTALL_URL=${NVM_INSTALL_URL:-https://raw.githubusercontent.com/nvm-sh/nvm/$NVM_VERSION/install.sh}
+HERDR_INSTALL_URL=${HERDR_INSTALL_URL:-https://herdr.dev/install.sh}
 PI_INSTALL_URL=${PI_INSTALL_URL:-https://pi.dev/install.sh}
 COPILOT_INSTALL_URL=${COPILOT_INSTALL_URL:-https://gh.io/copilot-install}
 CLAUDE_INSTALL_URL=${CLAUDE_INSTALL_URL:-https://claude.ai/install.sh}
@@ -186,6 +193,18 @@ ensure_copilot() {
   remove_pnpm_global copilot @github/copilot
 }
 
+# herdr from its vendor's installer, unless its binary is already there.
+ensure_herdr() {
+  local bin=$HOME/.local/bin/herdr
+  [ ! -x "$bin" ] || return 0
+  command -v curl >/dev/null 2>&1 || die "curl is required to install herdr"
+  say "installing herdr with its vendor's installer"
+  curl -fsSL --proto-redir '=https' "$HERDR_INSTALL_URL" | HERDR_INSTALL_DIR="$HOME/.local/bin" sh >/dev/null \
+    || die "cannot install herdr from $HERDR_INSTALL_URL (offline?)"
+  [ -x "$bin" ] || die "the herdr installer did not create $bin"
+  "$bin" --version >/dev/null 2>&1 </dev/null || die "$bin --version fails after the herdr installer"
+}
+
 # Claude Code from its native installer, unless its launcher is already there.
 ensure_claude() {
   local bin=$HOME/.local/bin/claude
@@ -200,21 +219,22 @@ ensure_claude() {
 
 main() {
   case "${1:-}" in
-    workstation)
-      ensure_nvm
-      load_nvm
-      ensure_node
-      ensure_pnpm
-      ;;
-    container)
-      command -v pnpm >/dev/null 2>&1 \
-        || die "pnpm not found on PATH; the devcontainer image should provide Node.js and pnpm"
-      ;;
+    workstation | container) ;;
     *)
       echo "Usage: $0 workstation|container" >&2
       return 2
       ;;
   esac
+  ensure_herdr
+  if [ "$1" = workstation ]; then
+    ensure_nvm
+    load_nvm
+    ensure_node
+    ensure_pnpm
+  else
+    command -v pnpm >/dev/null 2>&1 \
+      || die "pnpm not found on PATH; the devcontainer image should provide Node.js and pnpm"
+  fi
   mkdir -p "$PNPM_HOME"
   # pnpm refuses global commands while its global bin directory is not on
   # PATH: $PNPM_HOME/bin for pnpm 11+, $PNPM_HOME for older pnpm.
