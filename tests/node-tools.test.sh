@@ -2,24 +2,34 @@
 # Behavior checks for the unpinned agent CLIs Home Manager installs at switch
 # time on Linux (tools/node-tools.sh, run by home.nix's nodeTools activation):
 # on the WSL2 workstation nvm, Node.js LTS as nvm's default, and pnpm; in both
-# profiles Pi and the GitHub Copilot CLI from pnpm and Claude Code from its
-# native installer, all unpinned.
+# profiles Pi, the GitHub Copilot CLI, and Claude Code from their own
+# installers, all unpinned.
 #
-# nvm, its install script, npm, pnpm, and Claude Code's install script are
-# local fakes that log what they are asked to do, so nothing is downloaded.
-# Like the real ones, the fake nvm.sh is not errexit/nounset clean, the fake
-# pnpm refuses global commands while its global bin directory is off PATH, and
-# the fake Claude Code installer puts its launcher in ~/.local/bin.
+# nvm, its install script, npm, pnpm, and the Pi, Copilot, and Claude Code
+# install scripts are local fakes that log what they are asked to do, so
+# nothing is downloaded. Like the real ones, the fake nvm.sh is not
+# errexit/nounset clean, the fake pnpm refuses global commands while its
+# global bin directory is off PATH, the fake Pi installer refuses to replace a
+# pi it did not install (pnpm's, or a Windows one under /mnt) and links
+# ~/.local/bin/pi to its launcher in ~/.pi/agent/bin, and the fake Copilot and Claude Code installers put their
+# launchers in ~/.local/bin (Copilot's in $PREFIX/bin).
 #
 # Coverage:
 # - workstation, fresh HOME: nvm from its install script with PROFILE=/dev/null
-#   (no rc file touched), `nvm install --lts` as nvm's default, pnpm, the two
-#   exact pnpm installs, then Claude Code's installer, with $NVM_DIR/default
-#   linked to nvm's default Node.js; a re-run installs nothing and prints
-#   nothing;
-# - container: only the pnpm installs, on the pnpm already on PATH, and Claude
-#   Code's installer; without pnpm, or offline, the script fails with one
-#   clear message;
+#   (no rc file touched), `nvm install --lts` as nvm's default, pnpm, then the
+#   Pi and Copilot (PREFIX=~/.local) installers, each without a controlling
+#   terminal, and Claude Code's installer, with $NVM_DIR/default linked to nvm's default
+#   Node.js and nothing in pnpm's global bin; a re-run installs nothing and
+#   prints nothing;
+# - container: only the three installers, with the pnpm already on PATH;
+#   without pnpm, or offline, the script fails with one clear message;
+# - a container that an older switch gave pnpm's Pi and Copilot, with a
+#   Windows pi on PATH: Pi's installer runs without either on its PATH, and
+#   each pnpm copy is removed right after its installer, so ~/.local/bin/pi
+#   and ~/.local/bin/copilot are the only ones left; when Pi's installer
+#   cannot be downloaded, pnpm's Pi stays;
+# - a failing Pi installer shows its own output, fails the run, and keeps
+#   pnpm's Pi;
 # - a Claude Code that does not answer --version after its installer fails
 #   the run;
 # - both profiles' nodeTools activation runs after writeBoundary with the
@@ -29,7 +39,7 @@
 #   PATH; in both profiles every zsh (interactive or not) and a bash login
 #   shell, fresh or started from an environment that already marks the
 #   session variables sourced without PNPM_HOME or NVM_DIR, find ~/.local/bin
-#   (claude) and pnpm's global bin (pi, copilot) right after
+#   (claude, pi, copilot) and pnpm's global bin right after
 #   ~/.nix-profile/bin (herdr), once and ahead of system and Windows-interop
 #   copies, with no empty PATH entry, and on the workstation also nvm's
 #   default Node.js bin ($NVM_DIR/default/bin) between them; the container
@@ -41,9 +51,11 @@ set -u
 
 dotfiles_test_tmproot node-tools
 FAKE_NODE=v24.99.0
-PI_ADD="pnpm add -g --ignore-scripts @earendil-works/pi-coding-agent"
-COPILOT_ADD="pnpm add -g @github/copilot"
+PI_INSTALL="pi-installer tty=no"
+COPILOT_INSTALL="copilot-installer tty=no"
 CLAUDE_INSTALL="claude-installer"
+PI_REMOVE="pnpm remove -g @earendil-works/pi-coding-agent"
+COPILOT_REMOVE="pnpm remove -g @github/copilot"
 export NODE_TOOLS_LOG="$TMP_ROOT/calls.log"
 unset NVM_DIR NVM_BIN NVM_INC PNPM_HOME XDG_DATA_HOME NPM_CONFIG_PREFIX
 
@@ -126,11 +138,11 @@ case ":$PATH:" in
   *":$bin:"*) ;;
   *) echo "ERR_PNPM_GLOBAL_BIN_DIR_NOT_IN_PATH: $bin" >&2; exit 1 ;;
 esac
-[ -z "${PNPM_FAKE_OFFLINE:-}" ] || [ "$1" != add ] || { echo "ERR_PNPM_FETCH offline" >&2; exit 1; }
 case "$1 $2" in
   "bin -g") echo "$bin" ;;
-  "add -g")
+  "add -g" | "remove -g")
     echo "pnpm $*" >>"$NODE_TOOLS_LOG"
+    command=$1
     shift 2
     for arg; do package=$arg; done
     case "$package" in
@@ -138,9 +150,13 @@ case "$1 $2" in
       @github/copilot) name=copilot ;;
       *) echo "fake pnpm: unexpected package $package" >&2; exit 1 ;;
     esac
-    mkdir -p "$bin"
-    printf '#!/bin/sh\necho %s-fake\n' "$name" >"$bin/$name"
-    chmod +x "$bin/$name"
+    if [ "$command" = remove ]; then
+      rm -f "$bin/$name"
+    else
+      mkdir -p "$bin"
+      printf '#!/bin/sh\necho pnpm-%s-fake\n' "$name" >"$bin/$name"
+      chmod +x "$bin/$name"
+    fi
     ;;
   *) echo "fake pnpm: unexpected: $*" >&2; exit 1 ;;
 esac
@@ -160,9 +176,54 @@ chmod +x "$versions/9.9.9"
 ln -sfn "$versions/9.9.9" "$HOME/.local/bin/claude"
 EOF
 
+# A stand-in for Pi's install script (run with sh): like the real one, it
+# refuses a pi on PATH that is not its own managed install, keeps its launcher
+# in ~/.pi/agent/bin, and links it from ~/.local/bin, the first of its
+# preferred bin directories on PATH. It takes a /mnt/* PATH entry for WSL's
+# Windows npm directory with its pi, which the tests cannot create. It records
+# whether it could reach a terminal to prompt on.
+cat >"$FIX/pi-install.sh" <<'EOF'
+set -e
+if ( : <>/dev/tty ) 2>/dev/null; then tty=yes; else tty=no; fi
+echo "pi-installer tty=$tty" >>"$NODE_TOOLS_LOG"
+[ -z "${PI_FAKE_FAIL:-}" ] || { echo "error: Pi requires Node.js 22.19.0 or newer."; exit 1; }
+existing=$(command -v pi || true)
+case ":$PATH:" in
+  *:/mnt/*) existing=${existing:-$(printf '%s\n' "$PATH" | tr : '\n' | grep -m1 '^/mnt/')/pi} ;;
+esac
+if [ -n "$existing" ]; then
+  echo "Managed install refused to replace Pi at $existing. Uninstall it first." >&2
+  exit 1
+fi
+case ":$PATH:" in
+  *":$HOME/.local/bin:"*) ;;
+  *) echo "fake Pi installer: ~/.local/bin is not on PATH" >&2; exit 1 ;;
+esac
+mkdir -p "$HOME/.pi/agent/bin" "$HOME/.local/bin"
+printf '#!/bin/sh\necho pi-fake\n' >"$HOME/.pi/agent/bin/pi"
+chmod +x "$HOME/.pi/agent/bin/pi"
+ln -s ../../.pi/agent/bin/pi "$HOME/.local/bin/pi"
+echo "Pi was installed successfully."
+EOF
+
+# A stand-in for Copilot's install script (run with bash): like the real one,
+# it installs the binary into $PREFIX/bin.
+cat >"$FIX/copilot-install.sh" <<'EOF'
+set -e
+if ( : <>/dev/tty ) 2>/dev/null; then tty=yes; else tty=no; fi
+echo "copilot-installer tty=$tty" >>"$NODE_TOOLS_LOG"
+[ "$PREFIX" = "$HOME/.local" ] || { echo "fake Copilot installer: PREFIX=$PREFIX" >&2; exit 1; }
+mkdir -p "$PREFIX/bin"
+printf '#!/bin/sh\necho copilot-fake\n' >"$PREFIX/bin/copilot"
+chmod +x "$PREFIX/bin/copilot"
+EOF
+
 export NVM_INSTALL_URL="file://$FIX/install.sh"
+export PI_INSTALL_URL="file://$FIX/pi-install.sh"
+export COPILOT_INSTALL_URL="file://$FIX/copilot-install.sh"
 export CLAUDE_INSTALL_URL="file://$FIX/claude-install.sh"
 BASE_PATH="/usr/bin:/bin"
+WINDOWS_NPM="/mnt/c/Users/dev/AppData/Roaming/npm"
 
 # Runs tools/node-tools.sh $2 against scratch HOME $1 with PATH $3.
 run_tools() {
@@ -173,14 +234,14 @@ calls() {
   cat "$NODE_TOOLS_LOG" 2>/dev/null
 }
 
-INSTALLS="$PI_ADD
-$COPILOT_ADD
+INSTALLS="$PI_INSTALL
+$COPILOT_INSTALL
 $CLAUDE_INSTALL"
 
 # --- tools/node-tools.sh --------------------------------------------------------
 
 test_workstation_fresh_then_quiet() {
-  local home="$TMP_ROOT/ws" out bin
+  local home="$TMP_ROOT/ws" out
   mkdir -p "$home"
   : >"$NODE_TOOLS_LOG"
   out=$(run_tools "$home" workstation "$BASE_PATH") || fail "workstation on a fresh HOME failed: $out"
@@ -188,13 +249,11 @@ test_workstation_fresh_then_quiet() {
 nvm install --lts --no-progress
 nvm alias default lts/*
 npm install -g pnpm
-$INSTALLS" ] || fail "workstation did not install nvm, Node.js LTS as default, pnpm, the pnpm tools, then Claude Code, in order: $(calls)"
-  bin="$home/.local/share/pnpm/bin"
-  for tool in pi copilot; do
-    [ "$("$bin/$tool" --version)" = "$tool-fake" ] || fail "$tool does not run from pnpm's global bin"
+$INSTALLS" ] || fail "workstation did not install nvm, Node.js LTS as default, pnpm, then Pi, Copilot, and Claude Code without a terminal, in order: $(calls)"
+  for tool in pi copilot claude; do
+    [ "$("$home/.local/bin/$tool" --version)" = "$tool-fake" ] || fail "$tool does not run from ~/.local/bin"
+    [ ! -e "$home/.local/share/pnpm/bin/$tool" ] || fail "workstation installed $tool with pnpm"
   done
-  [ ! -e "$bin/claude" ] || fail "workstation installed Claude Code with pnpm"
-  [ "$("$home/.local/bin/claude" --version)" = claude-fake ] || fail "claude does not run from ~/.local/bin"
   [ "$("$home/.nvm/default/bin/node")" = "$FAKE_NODE" ] || fail "\$NVM_DIR/default is not nvm's default Node.js"
   for rc in .bashrc .bash_profile .profile .zshrc .zprofile; do
     [ ! -e "$home/$rc" ] || fail "the nvm installer wrote $rc, which Home Manager owns"
@@ -204,7 +263,7 @@ $INSTALLS" ] || fail "workstation did not install nvm, Node.js LTS as default, p
   out=$(run_tools "$home" workstation "$BASE_PATH") || fail "workstation re-run failed: $out"
   [ -z "$(calls)" ] || fail "a workstation re-run reinstalled something: $(calls)"
   [ -z "$out" ] || fail "a workstation re-run is not quiet: $out"
-  pass "workstation: nvm (PROFILE=/dev/null), Node.js LTS as default, pnpm, Pi and Copilot from pnpm, then Claude Code from its installer; re-runs install and print nothing"
+  pass "workstation: nvm (PROFILE=/dev/null), Node.js LTS as default, pnpm, then Pi, Copilot, and Claude Code from their installers without a terminal; re-runs install and print nothing"
 }
 
 test_container_and_failures() {
@@ -213,9 +272,10 @@ test_container_and_failures() {
   : >"$NODE_TOOLS_LOG"
   out=$(PNPM_HOME="$home/pnpm-home" run_tools "$home" container "$FIX/pnpm-only:$BASE_PATH") \
     || fail "container with pnpm on PATH failed: $out"
-  [ "$(calls)" = "$INSTALLS" ] || fail "container did not only run the two pnpm installs and Claude Code's installer: $(calls)"
-  [ -x "$home/pnpm-home/bin/pi" ] || fail "container ignored the image's PNPM_HOME"
-  [ -x "$home/.local/bin/claude" ] || fail "container did not install Claude Code into ~/.local/bin"
+  [ "$(calls)" = "$INSTALLS" ] || fail "container did not only run the Pi, Copilot, and Claude Code installers: $(calls)"
+  for tool in pi copilot claude; do
+    [ -x "$home/.local/bin/$tool" ] || fail "container did not install $tool into ~/.local/bin"
+  done
   [ ! -e "$home/.nvm" ] || fail "container installed nvm"
 
   : >"$NODE_TOOLS_LOG"
@@ -228,10 +288,17 @@ test_container_and_failures() {
   fi
   assert_contains "$out" "pnpm not found on PATH" "missing pnpm is not reported clearly: $out"
 
-  if out=$(PNPM_FAKE_OFFLINE=1 run_tools "$TMP_ROOT/ct-offline" container "$FIX/pnpm-only:$BASE_PATH"); then
+  if out=$(PI_INSTALL_URL="file://$TMP_ROOT/missing.sh" PNPM_HOME="$TMP_ROOT/ct-offline/pnpm" \
+    run_tools "$TMP_ROOT/ct-offline" container "$FIX/pnpm-only:$BASE_PATH"); then
     fail "container offline succeeded: $out"
   fi
-  assert_contains "$out" "$PI_ADD failed (offline?)" "an offline pnpm install is not reported clearly: $out"
+  assert_contains "$out" "cannot download the Pi installer" "an offline Pi install is not reported clearly: $out"
+
+  if out=$(COPILOT_INSTALL_URL="file://$TMP_ROOT/missing.sh" PNPM_HOME="$TMP_ROOT/ct-nocopilot/pnpm" \
+    run_tools "$TMP_ROOT/ct-nocopilot" container "$FIX/pnpm-only:$BASE_PATH"); then
+    fail "container without Copilot's install script succeeded: $out"
+  fi
+  assert_contains "$out" "cannot install the GitHub Copilot CLI" "a failed Copilot download is not reported: $out"
 
   if out=$(NVM_INSTALL_URL="file://$TMP_ROOT/missing.sh" run_tools "$TMP_ROOT/ws-offline" workstation "$BASE_PATH"); then
     fail "workstation without the nvm install script succeeded: $out"
@@ -243,7 +310,58 @@ test_container_and_failures() {
     fail "container without Claude Code's install script succeeded: $out"
   fi
   assert_contains "$out" "cannot install Claude Code" "a failed Claude Code download is not reported: $out"
-  pass "container: only the pnpm installs, on the image's pnpm, and Claude Code's installer; no pnpm or no network fails with one clear message"
+  pass "container: only the Pi, Copilot, and Claude Code installers; no pnpm or no network fails with one clear message"
+}
+
+test_migrate_pnpm_copies() {
+  local home="$TMP_ROOT/migrate" out pnpm_bin
+  mkdir -p "$home"
+  pnpm_bin="$home/pnpm-home/bin"
+  # What an older switch left: pnpm's Pi and Copilot, with a Windows pi on
+  # WSL's PATH.
+  PNPM_HOME="$home/pnpm-home" PATH="$pnpm_bin:$FIX/pnpm-only:$BASE_PATH" \
+    pnpm add -g --ignore-scripts @earendil-works/pi-coding-agent
+  PNPM_HOME="$home/pnpm-home" PATH="$pnpm_bin:$FIX/pnpm-only:$BASE_PATH" pnpm add -g @github/copilot
+
+  # Without Pi's installer, pnpm's Pi keeps working.
+  : >"$NODE_TOOLS_LOG"
+  if out=$(PI_INSTALL_URL="file://$TMP_ROOT/missing.sh" PNPM_HOME="$home/pnpm-home" \
+    run_tools "$home" container "$FIX/pnpm-only:$BASE_PATH"); then
+    fail "an offline migration succeeded: $out"
+  fi
+  [ -x "$pnpm_bin/pi" ] || fail "an offline migration removed pnpm's Pi"
+  assert_not_contains "$(calls)" "pnpm remove" "an offline migration removed something: $(calls)"
+
+  : >"$NODE_TOOLS_LOG"
+  out=$(PNPM_HOME="$home/pnpm-home" run_tools "$home" container "$FIX/pnpm-only:$BASE_PATH:$WINDOWS_NPM") \
+    || fail "migrating pnpm's Pi and Copilot failed: $out"
+  [ "$(calls)" = "$PI_INSTALL
+$PI_REMOVE
+$COPILOT_INSTALL
+$COPILOT_REMOVE
+$CLAUDE_INSTALL" ] || fail "migration did not remove pnpm's Pi and Copilot each right after its installer: $(calls)"
+  for tool in pi copilot; do
+    [ ! -e "$pnpm_bin/$tool" ] || fail "migration left pnpm's $tool"
+    [ "$("$home/.local/bin/$tool" --version)" = "$tool-fake" ] || fail "$tool does not run from ~/.local/bin after migration"
+  done
+  pass "a container with pnpm's Pi and Copilot and a Windows pi ends with only the installers' copies in ~/.local/bin; an offline switch keeps pnpm's Pi"
+}
+
+test_pi_installer_failure() {
+  local home="$TMP_ROOT/pi-fail" out pnpm_bin
+  mkdir -p "$home"
+  pnpm_bin="$home/pnpm/bin"
+  PNPM_HOME="$home/pnpm" PATH="$pnpm_bin:$FIX/pnpm-only:$BASE_PATH" \
+    pnpm add -g --ignore-scripts @earendil-works/pi-coding-agent
+  : >"$NODE_TOOLS_LOG"
+  if out=$(PI_FAKE_FAIL=1 PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/pnpm-only:$BASE_PATH"); then
+    fail "a failing Pi installer was accepted: $out"
+  fi
+  assert_contains "$out" "Pi requires Node.js 22.19.0" "the Pi installer's own error is hidden: $out"
+  assert_contains "$out" "cannot install Pi from" "a failed Pi install is not reported: $out"
+  [ "$("$pnpm_bin/pi")" = pnpm-pi-fake ] || fail "a failing Pi installer removed pnpm's Pi"
+  assert_not_contains "$(calls)" "pnpm remove" "a failing Pi installer removed something: $(calls)"
+  pass "a failing Pi installer shows its own output, fails the run, and keeps pnpm's Pi"
 }
 
 test_claude_must_run() {
@@ -344,8 +462,8 @@ test_activation() {
 TOOLS="herdr node npm pnpm claude pi copilot"
 
 # Checks shell $2's report $3 (NAME=first match, rawpath=PATH, then path=DIR lines) for
-# profile $1 in scratch HOME $4: herdr is the Nix profile's, claude is the
-# native launcher in ~/.local/bin, pi and copilot are pnpm's, node, npm, and
+# profile $1 in scratch HOME $4: herdr is the Nix profile's, claude, pi, and
+# copilot are the installers' launchers in ~/.local/bin, node, npm, and
 # pnpm are from $5 on the workstation, and ~/.local/bin, the nvm default bin
 # (workstation), and the pnpm dirs sit right after ~/.nix-profile/bin, once
 # each, and PATH has no empty entry.
@@ -353,9 +471,8 @@ check_shell() {
   local profile=$1 shell=$2 out=$3 home=$4 node_dir=${5-} tool dir front path
   local pnpm_home="$home/.local/share/pnpm"
   grep -qxF "herdr=$home/.nix-profile/bin/herdr" <<<"$out" || fail "$profile $shell: herdr is not the Nix profile's: $out"
-  grep -qxF "claude=$home/.local/bin/claude" <<<"$out" || fail "$profile $shell: claude is not the native launcher: $out"
-  for tool in pi copilot; do
-    grep -qxF "$tool=$pnpm_home/bin/$tool" <<<"$out" || fail "$profile $shell: $tool is not pnpm's: $out"
+  for tool in claude pi copilot; do
+    grep -qxF "$tool=$home/.local/bin/$tool" <<<"$out" || fail "$profile $shell: $tool is not its installer's launcher: $out"
   done
   front="$pnpm_home/bin:$pnpm_home"
   case "$profile" in
@@ -435,11 +552,13 @@ test_shell_path() {
       check_shell "$profile" "bash login${stale:+ ($stale)}" "$out" "$home" "$node_default"
     done
   done
-  pass "in both profiles every zsh and a bash login shell, fresh or from an environment that already sourced the session variables, run herdr from ~/.nix-profile/bin, then claude from ~/.local/bin and pi and copilot from pnpm, right after it and ahead of system and Windows copies, once each; the workstation adds nvm's default node, npm, and pnpm there, and its interactive zsh loads nvm"
+  pass "in both profiles every zsh and a bash login shell, fresh or from an environment that already sourced the session variables, run herdr from ~/.nix-profile/bin, then claude, pi, and copilot from ~/.local/bin, with pnpm's global bins, right after it and ahead of system and Windows copies, once each; the workstation adds nvm's default node, npm, and pnpm there, and its interactive zsh loads nvm"
 }
 
 test_workstation_fresh_then_quiet
 test_container_and_failures
+test_migrate_pnpm_copies
+test_pi_installer_failure
 test_claude_must_run
 test_activation
 test_shell_path
