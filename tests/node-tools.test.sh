@@ -10,24 +10,26 @@
 # nothing is downloaded. Like the real ones, the fake nvm.sh is not
 # errexit/nounset clean, the fake pnpm refuses global commands while its
 # global bin directory is off PATH, the fake Pi installer refuses to replace a
-# pi it did not install and links ~/.local/bin/pi to its launcher in
-# ~/.pi/agent/bin, and the fake Copilot and Claude Code installers put their
+# pi it did not install (pnpm's, or a Windows one under /mnt) and links
+# ~/.local/bin/pi to its launcher in ~/.pi/agent/bin, and the fake Copilot and Claude Code installers put their
 # launchers in ~/.local/bin (Copilot's in $PREFIX/bin).
 #
 # Coverage:
 # - workstation, fresh HOME: nvm from its install script with PROFILE=/dev/null
 #   (no rc file touched), `nvm install --lts` as nvm's default, pnpm, then the
-#   Pi, Copilot (PREFIX=~/.local), and Claude Code installers, each without a
-#   controlling terminal, with $NVM_DIR/default linked to nvm's default
+#   Pi and Copilot (PREFIX=~/.local) installers, each without a controlling
+#   terminal, and Claude Code's installer, with $NVM_DIR/default linked to nvm's default
 #   Node.js and nothing in pnpm's global bin; a re-run installs nothing and
 #   prints nothing;
 # - container: only the three installers, with the pnpm already on PATH;
 #   without pnpm, or offline, the script fails with one clear message;
-# - a container that an older switch gave pnpm's Pi and Copilot: pnpm's Pi is
-#   removed right before Pi's installer runs, pnpm's Copilot right after
-#   Copilot's, so ~/.local/bin/pi and ~/.local/bin/copilot are the only ones
-#   left; when Pi's installer cannot be downloaded, pnpm's Pi stays;
-# - a failing Pi installer shows its own output and fails the run;
+# - a container that an older switch gave pnpm's Pi and Copilot, with a
+#   Windows pi on PATH: Pi's installer runs without either on its PATH, and
+#   each pnpm copy is removed right after its installer, so ~/.local/bin/pi
+#   and ~/.local/bin/copilot are the only ones left; when Pi's installer
+#   cannot be downloaded, pnpm's Pi stays;
+# - a failing Pi installer shows its own output, fails the run, and keeps
+#   pnpm's Pi;
 # - a Claude Code that does not answer --version after its installer fails
 #   the run;
 # - both profiles' nodeTools activation runs after writeBoundary with the
@@ -177,14 +179,18 @@ EOF
 # A stand-in for Pi's install script (run with sh): like the real one, it
 # refuses a pi on PATH that is not its own managed install, keeps its launcher
 # in ~/.pi/agent/bin, and links it from ~/.local/bin, the first of its
-# preferred bin directories on PATH. It records whether it could reach a
-# terminal to prompt on.
+# preferred bin directories on PATH. It takes a /mnt/* PATH entry for WSL's
+# Windows npm directory with its pi, which the tests cannot create. It records
+# whether it could reach a terminal to prompt on.
 cat >"$FIX/pi-install.sh" <<'EOF'
 set -e
 if ( : <>/dev/tty ) 2>/dev/null; then tty=yes; else tty=no; fi
 echo "pi-installer tty=$tty" >>"$NODE_TOOLS_LOG"
 [ -z "${PI_FAKE_FAIL:-}" ] || { echo "error: Pi requires Node.js 22.19.0 or newer."; exit 1; }
 existing=$(command -v pi || true)
+case ":$PATH:" in
+  *:/mnt/*) existing=${existing:-$(printf '%s\n' "$PATH" | tr : '\n' | grep -m1 '^/mnt/')/pi} ;;
+esac
 if [ -n "$existing" ]; then
   echo "Managed install refused to replace Pi at $existing. Uninstall it first." >&2
   exit 1
@@ -217,6 +223,7 @@ export PI_INSTALL_URL="file://$FIX/pi-install.sh"
 export COPILOT_INSTALL_URL="file://$FIX/copilot-install.sh"
 export CLAUDE_INSTALL_URL="file://$FIX/claude-install.sh"
 BASE_PATH="/usr/bin:/bin"
+WINDOWS_NPM="/mnt/c/Users/dev/AppData/Roaming/npm"
 
 # Runs tools/node-tools.sh $2 against scratch HOME $1 with PATH $3.
 run_tools() {
@@ -310,7 +317,8 @@ test_migrate_pnpm_copies() {
   local home="$TMP_ROOT/migrate" out pnpm_bin
   mkdir -p "$home"
   pnpm_bin="$home/pnpm-home/bin"
-  # What an older switch left: pnpm's Pi and Copilot.
+  # What an older switch left: pnpm's Pi and Copilot, with a Windows pi on
+  # WSL's PATH.
   PNPM_HOME="$home/pnpm-home" PATH="$pnpm_bin:$FIX/pnpm-only:$BASE_PATH" \
     pnpm add -g --ignore-scripts @earendil-works/pi-coding-agent
   PNPM_HOME="$home/pnpm-home" PATH="$pnpm_bin:$FIX/pnpm-only:$BASE_PATH" pnpm add -g @github/copilot
@@ -325,29 +333,35 @@ test_migrate_pnpm_copies() {
   assert_not_contains "$(calls)" "pnpm remove" "an offline migration removed something: $(calls)"
 
   : >"$NODE_TOOLS_LOG"
-  out=$(PNPM_HOME="$home/pnpm-home" run_tools "$home" container "$FIX/pnpm-only:$BASE_PATH") \
+  out=$(PNPM_HOME="$home/pnpm-home" run_tools "$home" container "$FIX/pnpm-only:$BASE_PATH:$WINDOWS_NPM") \
     || fail "migrating pnpm's Pi and Copilot failed: $out"
-  [ "$(calls)" = "$PI_REMOVE
-$PI_INSTALL
+  [ "$(calls)" = "$PI_INSTALL
+$PI_REMOVE
 $COPILOT_INSTALL
 $COPILOT_REMOVE
-$CLAUDE_INSTALL" ] || fail "migration did not remove pnpm's Pi before Pi's installer and pnpm's Copilot after Copilot's: $(calls)"
+$CLAUDE_INSTALL" ] || fail "migration did not remove pnpm's Pi and Copilot each right after its installer: $(calls)"
   for tool in pi copilot; do
     [ ! -e "$pnpm_bin/$tool" ] || fail "migration left pnpm's $tool"
     [ "$("$home/.local/bin/$tool" --version)" = "$tool-fake" ] || fail "$tool does not run from ~/.local/bin after migration"
   done
-  pass "a container with pnpm's Pi and Copilot ends with only the installers' copies in ~/.local/bin; an offline switch keeps pnpm's Pi"
+  pass "a container with pnpm's Pi and Copilot and a Windows pi ends with only the installers' copies in ~/.local/bin; an offline switch keeps pnpm's Pi"
 }
 
 test_pi_installer_failure() {
-  local home="$TMP_ROOT/pi-fail" out
+  local home="$TMP_ROOT/pi-fail" out pnpm_bin
   mkdir -p "$home"
+  pnpm_bin="$home/pnpm/bin"
+  PNPM_HOME="$home/pnpm" PATH="$pnpm_bin:$FIX/pnpm-only:$BASE_PATH" \
+    pnpm add -g --ignore-scripts @earendil-works/pi-coding-agent
+  : >"$NODE_TOOLS_LOG"
   if out=$(PI_FAKE_FAIL=1 PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/pnpm-only:$BASE_PATH"); then
     fail "a failing Pi installer was accepted: $out"
   fi
   assert_contains "$out" "Pi requires Node.js 22.19.0" "the Pi installer's own error is hidden: $out"
   assert_contains "$out" "cannot install Pi from" "a failed Pi install is not reported: $out"
-  pass "a failing Pi installer shows its own output and fails the run"
+  [ "$("$pnpm_bin/pi")" = pnpm-pi-fake ] || fail "a failing Pi installer removed pnpm's Pi"
+  assert_not_contains "$(calls)" "pnpm remove" "a failing Pi installer removed something: $(calls)"
+  pass "a failing Pi installer shows its own output, fails the run, and keeps pnpm's Pi"
 }
 
 test_claude_must_run() {

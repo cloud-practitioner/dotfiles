@@ -29,16 +29,24 @@ CALM_DIR="$ROOT/home/.pi/agent/extensions/calm"
 # The package behind the `pi` on PATH. Home Manager installs Pi with its
 # official installer, whose ~/.local/bin/pi links to a launcher in
 # ~/.pi/agent/bin that runs the release named by
-# ~/.pi/agent/install/current-version; `npm install -g` instead symlinks
-# <prefix>/bin/pi into <prefix>/lib/node_modules. Without a pi on PATH every
-# test that needs the package skips.
+# ~/.pi/agent/install/current-version; older switches used `pnpm add -g`,
+# whose bin is a shell shim naming the package's path relative to the shim;
+# `npm install -g` instead symlinks <prefix>/bin/pi into
+# <prefix>/lib/node_modules. Without a pi on PATH every test that needs the
+# package skips.
 pi_package_dir() {
-  local bin real agent version pkg=node_modules/@earendil-works/pi-coding-agent
+  local bin real rel agent version pkg=node_modules/@earendil-works/pi-coding-agent
   bin=$(command -v pi 2>/dev/null) || return 0
   real=$(readlink -f "$bin")
   case "$real" in
     */"$pkg"/*) printf '%s\n' "${real%%/"$pkg"/*}/$pkg"; return 0 ;;
   esac
+  rel=$(grep -o "\"\$basedir/[^\"]*/$pkg/" "$real" 2>/dev/null | head -n1) || true
+  if [ -n "$rel" ]; then
+    rel=${rel#\"\$basedir/}
+    (cd "$(dirname "$real")/${rel%/}" 2>/dev/null && pwd -P)
+    return 0
+  fi
   agent=$(dirname "$(dirname "$real")")
   if IFS= read -r version <"$agent/install/current-version" 2>/dev/null; then
     printf '%s\n' "$agent/install/releases/$version/$pkg"
@@ -99,7 +107,8 @@ find_chrome() {
 
 # Link Pi's own copy of dependency $1 into fixture $2, found the way Node
 # resolves it from Pi's real package directory: nested under it (npm install
-# -g) or beside it (the pi.dev installer's release directory).
+# -g) or beside it (pnpm's global store, the pi.dev installer's release
+# directory).
 link_pi_dependency() {
   local dep=$1 fixture=$2 dir
   dir=$(cd "$PI_PACKAGE_DIR" && pwd -P)

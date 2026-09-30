@@ -19,18 +19,20 @@
 #   curl -fsSL https://claude.ai/install.sh | bash     (Claude Code)
 # Each launcher ends up in ~/.local/bin, which home.nix puts first on PATH and
 # which comes first on the PATH the installers get, and must answer
-# `--version` after it is installed. The installers run without a controlling
-# terminal (setsid), so they never prompt or edit a shell rc file.
+# `--version` after it is installed. The Pi and Copilot installers run without
+# a controlling terminal (setsid), so they never prompt or edit a shell rc
+# file.
 #
 # Pi's installer makes a Pi-managed install (pinned dependencies, updated by
 # `pi update`) under ~/.pi/agent/install (or $PI_CODING_AGENT_DIR/install),
 # with its launcher in the bin directory beside it linked from ~/.local/bin/pi.
 # It migrates only an npm-installed Pi itself and refuses to replace any
-# other, so a pnpm-installed Pi from an older switch is removed first, as the
-# installer asks, once its script has downloaded.
+# other, so it runs without pnpm's global bin directories or WSL's Windows
+# PATH (/mnt/*) on its PATH.
 # Copilot's installer puts its binary in $PREFIX/bin (~/.local/bin, which
-# `copilot update` updates in place); a pnpm-installed copy from an older
-# switch is removed after it. Claude Code's native launcher is always
+# `copilot update` updates in place). Once the new Pi or Copilot answers
+# `--version`, a pnpm-installed copy from an older switch is removed, so a
+# failed install keeps the old one. Claude Code's native launcher is always
 # ~/.local/bin/claude, which its updater re-points in place; a pnpm copy could
 # not update itself, since that updater only knows npm and native installs.
 #
@@ -135,7 +137,23 @@ remove_pnpm_global() {
   [ ! -e "$dir/$bin" ] && [ ! -L "$dir/$bin" ] || die "pnpm remove -g $pkg left $dir/$bin behind"
 }
 
-# Pi from its official installer, unless its launcher is already there.
+# The PATH for Pi's installer: ~/.local/bin first, without pnpm's global bin
+# directories or WSL's Windows PATH (/mnt/*), whose pi it would refuse to
+# replace.
+pi_installer_path() {
+  local dir dirs path=$HOME/.local/bin
+  IFS=: read -ra dirs <<<"$PATH"
+  for dir in "${dirs[@]}"; do
+    case "$dir" in
+      "" | "$HOME/.local/bin" | "$PNPM_HOME/bin" | "$PNPM_HOME" | /mnt/*) ;;
+      *) path=$path:$dir ;;
+    esac
+  done
+  printf '%s\n' "$path"
+}
+
+# Pi from its official installer, unless its launcher is already there, then
+# without an older pnpm copy.
 ensure_pi() {
   local bin=$HOME/.local/bin/pi script out
   [ ! -x "$bin" ] || return 0
@@ -143,30 +161,29 @@ ensure_pi() {
   command -v setsid >/dev/null 2>&1 || die "setsid is required to install Pi without prompts"
   script=$(curl -fsSL --proto-redir '=https' "$PI_INSTALL_URL") \
     || die "cannot download the Pi installer from $PI_INSTALL_URL (offline?)"
-  remove_pnpm_global pi @earendil-works/pi-coding-agent
   say "installing Pi with its official installer"
-  out=$(printf '%s\n' "$script" | PATH="$HOME/.local/bin:$PATH" setsid -w sh 2>&1) || {
+  out=$(printf '%s\n' "$script" | PATH=$(pi_installer_path) setsid -w sh 2>&1) || {
     printf '%s\n' "$out" >&2
     die "cannot install Pi from $PI_INSTALL_URL (offline?)"
   }
   [ -x "$bin" ] || die "the Pi installer did not create $bin"
   "$bin" --version >/dev/null 2>&1 </dev/null || die "$bin --version fails after the Pi installer"
+  remove_pnpm_global pi @earendil-works/pi-coding-agent
 }
 
 # The GitHub Copilot CLI from its official installer, unless it is already
 # there, then without an older pnpm copy.
 ensure_copilot() {
   local bin=$HOME/.local/bin/copilot
-  if [ ! -x "$bin" ]; then
-    command -v curl >/dev/null 2>&1 || die "curl is required to install the GitHub Copilot CLI"
-    command -v setsid >/dev/null 2>&1 || die "setsid is required to install the GitHub Copilot CLI without prompts"
-    say "installing the GitHub Copilot CLI with its official installer"
-    curl -fsSL --proto-redir '=https' "$COPILOT_INSTALL_URL" \
-      | PREFIX="$HOME/.local" PATH="$HOME/.local/bin:$PATH" setsid -w bash >/dev/null \
-      || die "cannot install the GitHub Copilot CLI from $COPILOT_INSTALL_URL (offline?)"
-    [ -x "$bin" ] || die "the GitHub Copilot CLI installer did not create $bin"
-    "$bin" --version >/dev/null 2>&1 </dev/null || die "$bin --version fails after the GitHub Copilot CLI installer"
-  fi
+  [ ! -x "$bin" ] || return 0
+  command -v curl >/dev/null 2>&1 || die "curl is required to install the GitHub Copilot CLI"
+  command -v setsid >/dev/null 2>&1 || die "setsid is required to install the GitHub Copilot CLI without prompts"
+  say "installing the GitHub Copilot CLI with its official installer"
+  curl -fsSL --proto-redir '=https' "$COPILOT_INSTALL_URL" \
+    | PREFIX="$HOME/.local" PATH="$HOME/.local/bin:$PATH" setsid -w bash >/dev/null \
+    || die "cannot install the GitHub Copilot CLI from $COPILOT_INSTALL_URL (offline?)"
+  [ -x "$bin" ] || die "the GitHub Copilot CLI installer did not create $bin"
+  "$bin" --version >/dev/null 2>&1 </dev/null || die "$bin --version fails after the GitHub Copilot CLI installer"
   remove_pnpm_global copilot @github/copilot
 }
 

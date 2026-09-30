@@ -156,11 +156,11 @@ curl -fsSL https://claude.ai/install.sh | bash
 ```
 
 Each installer puts its launcher in `~/.local/bin` (`pi`, `copilot`, `claude`), and each CLI must answer `--version` after it is installed.
-The installers run without a controlling terminal, so they never prompt or edit `~/.zshrc`, `~/.bashrc`, or `~/.profile`.
+The Pi and Copilot installers run without a controlling terminal, so they never prompt or edit `~/.zshrc`, `~/.bashrc`, or `~/.profile`.
 
 - **Pi** gets a Pi-managed install under `~/.pi/agent/install` (or `$PI_CODING_AGENT_DIR/install`) with pinned dependencies, on the Node.js and npm that the profile provides (below); `~/.local/bin/pi` links to its launcher in the `bin` directory beside it.
-  Pi's installer migrates an npm-installed Pi itself but refuses to replace a pnpm one, so a switch removes the `pnpm add -g` copy that an older switch installed (`pnpm remove -g @earendil-works/pi-coding-agent`) right before it runs the installer.
-- **The GitHub Copilot CLI** is its release binary at `~/.local/bin/copilot`; a switch then removes the `pnpm add -g @github/copilot` copy that an older switch installed.
+  Pi's installer migrates an npm-installed Pi itself but refuses to replace any other, so it runs without pnpm's global bin directories or the Windows `PATH` (`/mnt/*`) on its `PATH`; once the new `pi` answers `--version`, a switch removes the `pnpm add -g` copy that an older switch installed (`pnpm remove -g @earendil-works/pi-coding-agent`), so a failed install keeps the old one.
+- **The GitHub Copilot CLI** is its release binary at `~/.local/bin/copilot`; once it answers `--version`, a switch removes the `pnpm add -g @github/copilot` copy that an older switch installed.
 - **Claude Code** comes from its native installer: its updater only knows npm and native installs, so it would put every update of a pnpm copy into npm's global prefix, where the pnpm copy keeps shadowing it.
   The native launcher is always `~/.local/bin/claude`, and its updater re-points it in place; the installer also removes a leftover npm-global copy.
 
