@@ -38,7 +38,9 @@
 #     is, with a warning. Once ~/.claude/skills is empty (or
 #     absent) it becomes a link to $CLAUDE_CONFIG_DIR/skills, so later installs
 #     (no-mistakes init) land there. A ~/.claude/skills that is already a link
-#     is left alone.
+#     is left alone. While it is the link to $CLAUDE_CONFIG_DIR/skills, each
+#     dangling link there is re-pointed at ~/.agents/skills/<name>, or reported
+#     with a warning when no copy exists there.
 #
 # unlink (before checkLinkTargets): removes the two re-pointed ~/.claude links
 # again, and only while they still point where install left them, so Home
@@ -190,9 +192,27 @@ drop_duplicate_link() {
   return 1
 }
 
+# Re-point each dangling link in $1 at the same-named skill in ~/.agents/skills,
+# where the skills CLI keeps its copies, or warn when there is none.
+heal_skills() {
+  local dir=$1 agents="$HOME/.agents/skills" entry name
+  for entry in "$dir"/* "$dir"/.[!.]*; do
+    [ -L "$entry" ] && [ ! -e "$entry" ] || continue
+    name=${entry##*/}
+    if [ -e "$agents/$name" ]; then
+      rm -f -- "$entry"
+      ln -s -- "$agents/$name" "$entry"
+      log "re-pointed $entry: a dangling link, to $agents/$name"
+    else
+      warn "$entry is a dangling link and $agents/$name does not exist; re-install or remove it"
+    fi
+  done
+}
+
 adopt_skills() {
   local home_skills=$1 dest=$2 entry name kept=0
   if [ -L "$home_skills" ]; then
+    [ "$home_skills" -ef "$dest" ] && heal_skills "$dest"
     return 0
   fi
   if [ -e "$home_skills" ] && [ ! -d "$home_skills" ]; then
@@ -248,6 +268,7 @@ adopt_skills() {
   fi
   ln -s -- "$dest" "$home_skills"
   log "linked $home_skills -> $dest"
+  heal_skills "$dest"
 }
 
 # The directory Claude reads when it is not ~/.claude, else nothing.

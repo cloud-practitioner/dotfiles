@@ -276,9 +276,10 @@ activation also installs the Claude files there:
   them, is removed as a duplicate. Only two live, different skills stay put,
   with a warning. Once `~/.claude/skills` is empty it becomes a link
   to `$CLAUDE_CONFIG_DIR/skills`, so later installs land there.
-  A skill a tool later installs through it as a relative link (as the
-  `skills` CLI does) resolves against `$CLAUDE_CONFIG_DIR/skills` and may
-  dangle; re-install it or link it by absolute path.
+  From then on, each apply re-points a dangling link in
+  `$CLAUDE_CONFIG_DIR/skills` (such as a relative link the `skills` CLI
+  installs through `~/.claude/skills`) at `~/.agents/skills/<name>`, and warns
+  about one with no copy there; re-install or remove that skill.
 
 Activation only sees the variable if the shell that runs it has it, so run
 `hm-update` (devcontainer) or `rebuild.sh` from a shell where it is set (on macOS,
