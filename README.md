@@ -27,7 +27,7 @@ Running the switch builds:
 
 - System settings (dark mode, key repeat, dock, Finder, trackpad)
 - Homebrew apps (casks and CLI tools)
-- Nix user packages (ripgrep, fd, fzf, jq, lazygit, Neovim, Hack Nerd Font)
+- Nix user packages (ripgrep, fd, fzf, jq, bun, lazygit, Neovim, Hack Nerd Font)
 - On Linux, herdr pinned to its vendor's own release build, Pi and the GitHub Copilot CLI unpinned from pnpm, which the WSL2 workstation gets from nvm's Node.js LTS, and Claude Code unpinned from its native installer (see [Upstream CLI tools](#upstream-cli-tools))
 - Shell (zsh, aliases, starship prompt)
 - Editor (Neovim config with the rose-pine moon theme)
@@ -116,7 +116,7 @@ There is deliberately no `hm-update` on WSL2; that shortcut exists only inside a
 
 What you get on Linux:
 
-- Nix user packages: ripgrep, fd, fzf, jq, lazygit, Neovim, Hack Nerd Font.
+- Nix user packages: ripgrep, fd, fzf, jq, bun, lazygit, Neovim, Hack Nerd Font.
 - WezTerm from nixpkgs, the Linux equivalent of its macOS cask.
 - herdr pinned to what its vendor's own installer installs, Pi and the GitHub Copilot CLI unpinned from pnpm, and Claude Code unpinned from its native installer, in both Linux profiles; on the WSL2 workstation, nvm with Node.js LTS and pnpm under the pnpm CLIs - see [Upstream CLI tools](#upstream-cli-tools).
 - The same symlinked shell (zsh + starship), Neovim, WezTerm, and agent configs as macOS.
