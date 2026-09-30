@@ -29,12 +29,18 @@
 #     edit the file Claude reads instead of the dotfiles checkout.
 #   - skills: a one-way move. Each entry of a real ~/.claude/skills directory
 #     moves into $CLAUDE_CONFIG_DIR/skills unless that name already exists
-#     there. A link reaching the same skill as that existing entry (as an image
-#     rebuild re-creates them) is a duplicate and is removed; any other clash
-#     stays where it is, with a warning. Once ~/.claude/skills is empty (or
+#     there. When it does, a link (never a real file or directory) that cannot
+#     be the skill to keep goes: a dangling ~/.claude one is removed; a dangling
+#     configured one is replaced by the ~/.claude entry, as is a configured one
+#     that reaches the skill only through that entry; a ~/.claude link reaching
+#     the same skill (as an image rebuild re-creates them) is a duplicate and is
+#     removed. Only a clash between two live, different skills stays where it
+#     is, with a warning. Once ~/.claude/skills is empty (or
 #     absent) it becomes a link to $CLAUDE_CONFIG_DIR/skills, so later installs
 #     (no-mistakes init) land there. A ~/.claude/skills that is already a link
-#     is left alone.
+#     is left alone. While it is the link to $CLAUDE_CONFIG_DIR/skills, each
+#     dangling link there is re-pointed at ~/.agents/skills/<name>, or reported
+#     with a warning when no copy exists there.
 #
 # unlink (before checkLinkTargets): removes the two re-pointed ~/.claude links
 # again, and only while they still point where install left them, so Home
@@ -186,9 +192,27 @@ drop_duplicate_link() {
   return 1
 }
 
+# Re-point each dangling link in $1 at the same-named skill in ~/.agents/skills,
+# where the skills CLI keeps its copies, or warn when there is none.
+heal_skills() {
+  local dir=$1 agents="$HOME/.agents/skills" entry name
+  for entry in "$dir"/* "$dir"/.[!.]*; do
+    [ -L "$entry" ] && [ ! -e "$entry" ] || continue
+    name=${entry##*/}
+    if [ -e "$agents/$name" ]; then
+      rm -f -- "$entry"
+      ln -s -- "$agents/$name" "$entry"
+      log "re-pointed $entry: a dangling link, to $agents/$name"
+    else
+      warn "$entry is a dangling link and $agents/$name does not exist; re-install or remove it"
+    fi
+  done
+}
+
 adopt_skills() {
   local home_skills=$1 dest=$2 entry name kept=0
   if [ -L "$home_skills" ]; then
+    [ "$home_skills" -ef "$dest" ] && heal_skills "$dest"
     return 0
   fi
   if [ -e "$home_skills" ] && [ ! -d "$home_skills" ]; then
@@ -200,19 +224,33 @@ adopt_skills() {
     return 0
   fi
   mkdir -p -- "$dest"
+  # The owner linked the configured skills back to ~/.claude/skills: one directory.
+  [ "$dest" -ef "$home_skills" ] && return 0
 
   if [ -d "$home_skills" ]; then
     for entry in "$home_skills"/* "$home_skills"/.[!.]*; do
       [ -e "$entry" ] || [ -L "$entry" ] || continue
       name=${entry##*/}
       if [ -e "$dest/$name" ] || [ -L "$dest/$name" ]; then
-        if drop_duplicate_link "$entry" "$dest/$name"; then
+        if [ ! -e "$entry" ]; then
+          rm -f -- "$entry"
+          log "removed $entry: a dangling link, and $dest/$name already exists"
+          continue
+        elif [ ! -e "$dest/$name" ]; then
+          rm -f -- "$dest/$name"
+          log "replaced $dest/$name: a dangling link"
+        elif drop_duplicate_link "$entry" "$dest/$name"; then
           log "removed $entry: $dest/$name already reaches the same skill"
           continue
+        elif [ -L "$dest/$name" ] && [ "$dest/$name" -ef "$entry" ]; then
+          # The configured link reaches the skill only through $entry.
+          rm -f -- "$dest/$name"
+          log "replaced $dest/$name: it reached the skill through $entry"
+        else
+          kept=1
+          warn "kept $entry: $dest/$name already exists"
+          continue
         fi
-        kept=1
-        warn "kept $entry: $dest/$name already exists"
-        continue
       fi
       if [ -L "$entry" ]; then
         ln -s -- "$(moved_link_target "$entry")" "$dest/$name"
@@ -230,6 +268,7 @@ adopt_skills() {
   fi
   ln -s -- "$dest" "$home_skills"
   log "linked $home_skills -> $dest"
+  heal_skills "$dest"
 }
 
 # The directory Claude reads when it is not ~/.claude, else nothing.

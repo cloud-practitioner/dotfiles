@@ -268,14 +268,18 @@ activation also installs the Claude files there:
   `$CLAUDE_CONFIG_DIR`, so tools that edit them (hook installers) change the
   files Claude reads.
 - Skills move one way: each entry of a real `~/.claude/skills` directory moves
-  into `$CLAUDE_CONFIG_DIR/skills` unless that name already exists there, in
-  which case it stays put with a warning. A link that reaches the same skill as
-  the existing entry, as a container rebuild re-creates them, is a duplicate
-  and is removed instead. Once `~/.claude/skills` is empty it becomes a link
+  into `$CLAUDE_CONFIG_DIR/skills` unless that name already exists there.
+  Then a link that cannot be the skill to keep goes instead: a dangling
+  `~/.claude` link is removed, a dangling configured link (or one reaching the
+  skill only through the `~/.claude` entry) is replaced by that entry, and a
+  `~/.claude` link reaching the same skill, as a container rebuild re-creates
+  them, is removed as a duplicate. Only two live, different skills stay put,
+  with a warning. Once `~/.claude/skills` is empty it becomes a link
   to `$CLAUDE_CONFIG_DIR/skills`, so later installs land there.
-  A skill a tool later installs through it as a relative link (as the
-  `skills` CLI does) resolves against `$CLAUDE_CONFIG_DIR/skills` and may
-  dangle; re-install it or link it by absolute path.
+  From then on, each apply re-points a dangling link in
+  `$CLAUDE_CONFIG_DIR/skills` (such as a relative link the `skills` CLI
+  installs through `~/.claude/skills`) at `~/.agents/skills/<name>`, and warns
+  about one with no copy there; re-install or remove that skill.
 
 Activation only sees the variable if the shell that runs it has it, so run
 `hm-update` (devcontainer) or `rebuild.sh` from a shell where it is set (on macOS,

@@ -25,15 +25,21 @@
 #   edit) land in the configured directory;
 # - edge cases: absent/invalid/symlinked owner settings, hook already present,
 #   foreign files in Home Manager's way;
-# - skills: a one-way, one-time move; a name clash stays in place with a
-#   warning and keeps ~/.claude/skills a directory, unless it is a link that
-#   reaches the same skill (an image rebuild's re-created links), which is
-#   dropped as a duplicate; a ~/.claude/skills that is
-#   already a link is left alone, and a moved skill link still reads however
+# - skills: a one-way, one-time move; a clash between two live, different
+#   skills stays in place with a warning and keeps ~/.claude/skills a
+#   directory; a ~/.claude link reaching the same skill (an image rebuild's
+#   re-created links) is dropped as a duplicate; a dangling configured link, or
+#   one reaching the skill only through the ~/.claude entry, is replaced by
+#   that entry (the 2026-09-30 leak); a dangling ~/.claude link beside a
+#   configured skill is dropped; once ~/.claude/skills is the link, a dangling
+#   configured link is re-pointed at ~/.agents/skills/<name>, or reported when
+#   no copy exists there; a ~/.claude/skills that is
+#   another link is left alone, and a moved skill link still reads however
 #   its target was written (relative, or absolute through a symlinked directory
 #   or through ~/.claude/skills itself);
 # - configured skills, settings.json or CLAUDE.md the owner linked back into
-#   ~/.claude: nothing deleted and no link loop, across repeated switches.
+#   ~/.claude: nothing deleted or re-pointed, no warning and no link loop,
+#   across repeated switches.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -373,13 +379,18 @@ mkdir -p "$C" "$H/.claude/skills/mine" "$H/.agents/skills/rel"
 printf 'mine\n' >"$H/.claude/skills/mine/SKILL.md"
 printf 'rel\n' >"$H/.agents/skills/rel/SKILL.md"
 ln -s ../../.agents/skills/rel "$H/.claude/skills/rel"
+ln -s ../../.agents/skills/gone "$H/.claude/skills/gone"
 ln -s "$H/.claude/skills" "$C/skills"
+state=$(snapshot "$H/.claude/skills")
 activate "$C"
+assert_not_contains "$OUT" "warning:" "link-back skills: nothing is reported"
 activate "$C"
 [ -d "$H/.claude/skills" ] && [ ! -L "$H/.claude/skills" ] || fail "link-back skills: ~/.claude/skills stays the real directory"
 assert_link "$C/skills" "$H/.claude/skills" "link-back skills: the owner's link is kept"
+[ "$(snapshot "$H/.claude/skills")" = "$state" ] || fail "link-back skills: a live link, a real directory and a dangling link are all untouched"
 [ "$(cat "$C/skills/mine/SKILL.md" 2>&1)" = mine ] || fail "link-back skills: the skill survives and resolves without a loop"
 [ "$(cat "$C/skills/rel/SKILL.md" 2>&1)" = rel ] || fail "link-back skills: a relative skill link still resolves"
+assert_not_contains "$OUT" "warning:" "link-back skills: nothing is reported on a re-run"
 pass "link-back: skills linked back to ~/.claude/skills are neither deleted nor looped"
 
 new_case
@@ -494,6 +505,9 @@ activate "$C"
 [ "$OUT" = "claude-config: linked $H/.claude/settings.json -> $C/settings.json" ] || fail "rebuild: a re-run is a no-op, got: $OUT"
 pass "rebuild: an image link duplicating a configured one is dropped and ~/.claude/skills linked"
 
+# A clash between two live, different skills stays with a warning; a configured
+# link that reaches the ~/.claude entry only through it is replaced by that
+# entry, whether a real directory or a link, so neither is lost or looped.
 image_skills
 ln -s ../../.agents/skills/theirs "$H/.claude/skills/theirs"
 ln -s "$TMP_ROOT/$CASE/owner/theirs" "$C/skills/theirs"
@@ -503,15 +517,80 @@ ln -s "$H/.claude/skills/real" "$C/skills/real"
 ln -s ../../.agents/skills/back "$H/.claude/skills/back"
 ln -s "$H/.claude/skills/back" "$C/skills/back"
 activate "$C"
-activate "$C"
 [ -d "$H/.claude/skills" ] && [ ! -L "$H/.claude/skills" ] || fail "rebuild clash: ~/.claude/skills stays a directory"
 [ ! -e "$H/.claude/skills/arc" ] && [ ! -L "$H/.claude/skills/arc" ] || fail "rebuild clash: the duplicate still goes"
 assert_link "$H/.claude/skills/theirs" ../../.agents/skills/theirs "rebuild clash: a link reaching another skill is kept"
 [ "$(cat "$C/skills/theirs/SKILL.md")" = "owner theirs" ] || fail "rebuild clash: the configured skill is untouched"
-[ "$(cat "$C/skills/real/SKILL.md" 2>&1)" = real ] && [ ! -L "$H/.claude/skills/real" ] || fail "rebuild clash: a real directory the configured link reaches is kept"
-assert_link "$H/.claude/skills/back" ../../.agents/skills/back "rebuild clash: a link the configured link goes through is kept"
-[ "$(cat "$C/skills/back/SKILL.md" 2>&1)" = back ] || fail "rebuild clash: the configured link still reads, without a loop"
-for name in theirs real back; do
-  assert_contains "$OUT" "warning: kept $H/.claude/skills/$name" "rebuild clash: $name reported"
+[ -d "$C/skills/real" ] && [ ! -L "$C/skills/real" ] && [ "$(cat "$C/skills/real/SKILL.md")" = real ] ||
+  fail "rebuild clash: a real directory the configured link reached through is moved into its place"
+assert_link "$C/skills/back" "$H/.agents/skills/back" "rebuild clash: a link the configured link reached through is moved into its place"
+[ "$(cat "$C/skills/back/SKILL.md" 2>&1)" = back ] || fail "rebuild clash: the moved link still reads"
+assert_contains "$OUT" "warning: kept $H/.claude/skills/theirs" "rebuild clash: theirs reported"
+for name in real back; do
+  assert_not_contains "$OUT" "warning: kept $H/.claude/skills/$name" "rebuild clash: $name is not a clash"
 done
-pass "rebuild: genuine clashes stay in place with a warning while duplicates go"
+state=$(snapshot "$H/.claude/skills" "$C/skills")
+activate "$C"
+[ "$(snapshot "$H/.claude/skills" "$C/skills")" = "$state" ] || fail "rebuild clash: a re-run changes nothing"
+pass "rebuild: only a clash between two live, different skills stays with a warning"
+
+# The 2026-09-30 leak: an installer run with a temporary HOME re-pointed the
+# configured skill links into it, and they dangled once it was deleted. The
+# next switch replaces each dangling configured link with the working
+# ~/.claude entry, whether a link or a real directory, and links
+# ~/.claude/skills; a dangling ~/.claude link beside a configured skill goes.
+new_case
+mkdir -p "$H/.agents/skills/arc" "$H/.agents/skills/kept" "$C/skills/kept" "$H/.claude/skills/copy"
+printf 'arc\n' >"$H/.agents/skills/arc/SKILL.md"
+printf 'copy\n' >"$H/.claude/skills/copy/SKILL.md"
+printf 'configured kept\n' >"$C/skills/kept/SKILL.md"
+ln -s ../../.agents/skills/arc "$H/.claude/skills/arc"
+ln -s "$TMP_ROOT/$CASE/gone/arc" "$C/skills/arc"
+ln -s "$TMP_ROOT/$CASE/gone/copy" "$C/skills/copy"
+ln -s ../../.agents/skills/gone "$H/.claude/skills/kept"
+activate "$C"
+assert_link "$H/.claude/skills" "$C/skills" "leak: ~/.claude/skills becomes the link"
+assert_link "$C/skills/arc" "$H/.agents/skills/arc" "leak: a dangling configured link is replaced by the working ~/.claude link"
+[ "$(cat "$C/skills/arc/SKILL.md")" = arc ] || fail "leak: the healed link reads"
+[ -d "$C/skills/copy" ] && [ ! -L "$C/skills/copy" ] && [ "$(cat "$C/skills/copy/SKILL.md")" = copy ] ||
+  fail "leak: a dangling configured link is replaced by the working ~/.claude directory"
+[ "$(cat "$C/skills/kept/SKILL.md")" = "configured kept" ] || fail "leak: a live configured skill is untouched"
+assert_contains "$OUT" "replaced $C/skills/arc: a dangling link" "leak: the replacement is reported"
+assert_contains "$OUT" "removed $H/.claude/skills/kept: a dangling link" "leak: the dangling ~/.claude link's removal is reported"
+assert_not_contains "$OUT" "warning:" "leak: nothing is a clash"
+activate "$C"
+[ "$OUT" = "claude-config: linked $H/.claude/settings.json -> $C/settings.json" ] || fail "leak: a re-run is a no-op, got: $OUT"
+pass "leak: dangling skill links heal to the working entry and ~/.claude/skills is linked"
+
+# The same leak once ~/.claude/skills is already the link: each dangling
+# configured link is re-pointed at ~/.agents/skills/<name>, one with no copy
+# there is reported, and live links and real directories are untouched.
+new_case
+mkdir -p "$H/.agents/skills/arc" "$H/.agents/skills/own" "$C/skills/own" "$TMP_ROOT/$CASE/other/live"
+printf 'arc
+' >"$H/.agents/skills/arc/SKILL.md"
+printf 'configured own
+' >"$C/skills/own/SKILL.md"
+printf 'live
+' >"$TMP_ROOT/$CASE/other/live/SKILL.md"
+ln -s "$C/skills" "$H/.claude/skills"
+ln -s "$TMP_ROOT/$CASE/gone/arc" "$C/skills/arc"
+ln -s "$TMP_ROOT/$CASE/gone/lost" "$C/skills/lost"
+ln -s "$TMP_ROOT/$CASE/other/live" "$C/skills/live"
+activate "$C"
+assert_link "$H/.claude/skills" "$C/skills" "linked leak: ~/.claude/skills stays the link"
+assert_link "$C/skills/arc" "$H/.agents/skills/arc" "linked leak: a dangling configured link is re-pointed at ~/.agents/skills"
+[ "$(cat "$C/skills/arc/SKILL.md")" = arc ] || fail "linked leak: the healed link reads"
+assert_link "$C/skills/lost" "$TMP_ROOT/$CASE/gone/lost" "linked leak: a dangling link with no copy is left in place"
+assert_link "$C/skills/live" "$TMP_ROOT/$CASE/other/live" "linked leak: a live link is untouched"
+[ -d "$C/skills/own" ] && [ ! -L "$C/skills/own" ] && [ "$(cat "$C/skills/own/SKILL.md")" = "configured own" ] ||
+  fail "linked leak: a real directory is untouched, even with a copy in ~/.agents/skills"
+assert_contains "$OUT" "re-pointed $C/skills/arc" "linked leak: the repair is reported"
+assert_contains "$OUT" "warning: $C/skills/lost is a dangling link" "linked leak: the entry with no copy is reported"
+[ "$(grep -c 'warning:' <<<"$OUT")" = 1 ] || fail "linked leak: only the entry with no copy is a warning, got: $OUT"
+state=$(snapshot "$C/skills")
+activate "$C"
+[ "$(snapshot "$C/skills")" = "$state" ] || fail "linked leak: a re-run changes nothing"
+assert_not_contains "$OUT" "re-pointed" "linked leak: a re-run repairs nothing"
+assert_contains "$OUT" "warning: $C/skills/lost is a dangling link" "linked leak: the entry with no copy is still reported"
+pass "linked leak: dangling configured skill links heal from ~/.agents/skills, or are reported"
