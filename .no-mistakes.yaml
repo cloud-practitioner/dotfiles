@@ -1,0 +1,2 @@
+# This repository has no CI workflows (only an automation that closes outside pull requests).
+no_ci: true
