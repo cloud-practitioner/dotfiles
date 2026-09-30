@@ -60,6 +60,7 @@ in
     fd        # fast find
     fzf       # fuzzy finder
     jq        # json on the command line
+    bun       # javascript runtime and package manager
     lazygit
     neovim
     # the font everything renders in
