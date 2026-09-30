@@ -17,11 +17,10 @@
 #   curl -fsSL https://pi.dev/install.sh | sh          (Pi)
 #   curl -fsSL https://gh.io/copilot-install | bash    (GitHub Copilot CLI)
 #   curl -fsSL https://claude.ai/install.sh | bash     (Claude Code)
-# Each launcher ends up in ~/.local/bin, which home.nix puts first on PATH and
-# which comes first on the PATH the installers get, and must answer
-# `--version` after it is installed. The Pi and Copilot installers run without
-# a controlling terminal (setsid), so they never prompt or edit a shell rc
-# file.
+# Each launcher ends up in ~/.local/bin, which home.nix puts first on PATH,
+# and must answer `--version` after it is installed. The Pi and Copilot
+# installers get ~/.local/bin first on their PATH and run without a
+# controlling terminal (setsid), so they never prompt or edit a shell rc file.
 #
 # Pi's installer makes a Pi-managed install (pinned dependencies, updated by
 # `pi update`) under ~/.pi/agent/install (or $PI_CODING_AGENT_DIR/install),
