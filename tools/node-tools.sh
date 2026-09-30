@@ -6,20 +6,33 @@
 #   with npm as nvm's default, then pnpm, the way Microsoft's Node.js on WSL
 #   guide does it
 #   (https://learn.microsoft.com/en-us/windows/dev-environment/javascript/nodejs-on-wsl),
-#   then the pnpm tools below on that Node.js, then Claude Code;
-# - container: only the pnpm tools, on the devcontainer image's own Node.js and
-#   pnpm, then Claude Code.
+#   then the tools below on that Node.js;
+# - container: only the tools below, on the devcontainer image's own Node.js
+#   and pnpm.
+#
+# pnpm installs none of these tools; it only removes the copies that an older
+# switch installed with it.
 #
 # All are unpinned, so their own updaters keep them current:
-#   pnpm add -g --ignore-scripts @earendil-works/pi-coding-agent   (Pi)
-#   pnpm add -g @github/copilot                                    (GitHub Copilot CLI)
-#   curl -fsSL https://claude.ai/install.sh | bash                 (Claude Code)
-# pnpm blocks dependency build scripts by default, and Pi and Copilot run
-# without any. Claude Code comes from its native installer, not pnpm: its
-# updater only knows npm and native installs, so it would put every update of
-# a pnpm copy into npm's global prefix instead. The native launcher is always
-# ~/.local/bin/claude, which its updater re-points in place. Each CLI must
-# answer `--version` after it is installed.
+#   curl -fsSL https://pi.dev/install.sh | sh          (Pi)
+#   curl -fsSL https://gh.io/copilot-install | bash    (GitHub Copilot CLI)
+#   curl -fsSL https://claude.ai/install.sh | bash     (Claude Code)
+# Each launcher ends up in ~/.local/bin, which home.nix puts first on PATH and
+# which comes first on the PATH the installers get, and must answer
+# `--version` after it is installed. The installers run without a controlling
+# terminal (setsid), so they never prompt or edit a shell rc file.
+#
+# Pi's installer makes a Pi-managed install (pinned dependencies, updated by
+# `pi update`) under ~/.pi/agent/install (or $PI_CODING_AGENT_DIR/install),
+# with its launcher in the bin directory beside it linked from ~/.local/bin/pi.
+# It migrates only an npm-installed Pi itself and refuses to replace any
+# other, so a pnpm-installed Pi from an older switch is removed first, as the
+# installer asks, once its script has downloaded.
+# Copilot's installer puts its binary in $PREFIX/bin (~/.local/bin, which
+# `copilot update` updates in place); a pnpm-installed copy from an older
+# switch is removed after it. Claude Code's native launcher is always
+# ~/.local/bin/claude, which its updater re-points in place; a pnpm copy could
+# not update itself, since that updater only knows npm and native installs.
 #
 # On the workstation it also points $NVM_DIR/default at nvm's default Node.js,
 # so shells that do not load nvm (home.nix puts $NVM_DIR/default/bin on PATH)
@@ -30,12 +43,14 @@
 # turns that into a warning so the switch still completes.
 # Usage: tools/node-tools.sh workstation|container
 # NVM_DIR (default ~/.nvm), PNPM_HOME (default ${XDG_DATA_HOME:-~/.local/share}/pnpm,
-# as pnpm itself), NVM_INSTALL_URL, and CLAUDE_INSTALL_URL can be overridden;
-# the tests point them at local fixtures.
+# as pnpm itself), NVM_INSTALL_URL, PI_INSTALL_URL, COPILOT_INSTALL_URL, and
+# CLAUDE_INSTALL_URL can be overridden; the tests point them at local fixtures.
 set -euo pipefail
 
 NVM_VERSION=v0.40.8
 NVM_INSTALL_URL=${NVM_INSTALL_URL:-https://raw.githubusercontent.com/nvm-sh/nvm/$NVM_VERSION/install.sh}
+PI_INSTALL_URL=${PI_INSTALL_URL:-https://pi.dev/install.sh}
+COPILOT_INSTALL_URL=${COPILOT_INSTALL_URL:-https://gh.io/copilot-install}
 CLAUDE_INSTALL_URL=${CLAUDE_INSTALL_URL:-https://claude.ai/install.sh}
 # home.nix sets the same defaults for the shells (nodePath).
 export NVM_DIR=${NVM_DIR:-$HOME/.nvm}
@@ -109,17 +124,50 @@ ensure_pnpm() {
   [ -x "$prefix/bin/pnpm" ] || die "npm installed pnpm without $prefix/bin/pnpm"
 }
 
-# `pnpm add -g` $2... unless bin $1 is already in pnpm's global bin directory,
-# then check that the new bin runs.
-ensure_pnpm_global() {
-  local bin=$1 dir
-  shift
+# Removes pnpm's global package $2 if it left bin $1 in pnpm's global bin
+# directory (an older switch installed Pi and Copilot with pnpm).
+remove_pnpm_global() {
+  local bin=$1 pkg=$2 dir
   dir=$(pnpm bin -g) || die "pnpm bin -g failed"
-  [ ! -x "$dir/$bin" ] || return 0
-  say "pnpm add -g $*"
-  pnpm add -g "$@" >/dev/null || die "pnpm add -g $* failed (offline?)"
-  [ -x "$dir/$bin" ] || die "pnpm add -g $* did not install $dir/$bin"
-  "$dir/$bin" --version >/dev/null 2>&1 </dev/null || die "$dir/$bin --version fails after pnpm add -g $*"
+  [ -e "$dir/$bin" ] || [ -L "$dir/$bin" ] || return 0
+  say "pnpm remove -g $pkg"
+  pnpm remove -g "$pkg" >/dev/null || die "pnpm remove -g $pkg failed"
+  [ ! -e "$dir/$bin" ] && [ ! -L "$dir/$bin" ] || die "pnpm remove -g $pkg left $dir/$bin behind"
+}
+
+# Pi from its official installer, unless its launcher is already there.
+ensure_pi() {
+  local bin=$HOME/.local/bin/pi script out
+  [ ! -x "$bin" ] || return 0
+  command -v curl >/dev/null 2>&1 || die "curl is required to install Pi"
+  command -v setsid >/dev/null 2>&1 || die "setsid is required to install Pi without prompts"
+  script=$(curl -fsSL --proto-redir '=https' "$PI_INSTALL_URL") \
+    || die "cannot download the Pi installer from $PI_INSTALL_URL (offline?)"
+  remove_pnpm_global pi @earendil-works/pi-coding-agent
+  say "installing Pi with its official installer"
+  out=$(printf '%s\n' "$script" | PATH="$HOME/.local/bin:$PATH" setsid -w sh 2>&1) || {
+    printf '%s\n' "$out" >&2
+    die "cannot install Pi from $PI_INSTALL_URL (offline?)"
+  }
+  [ -x "$bin" ] || die "the Pi installer did not create $bin"
+  "$bin" --version >/dev/null 2>&1 </dev/null || die "$bin --version fails after the Pi installer"
+}
+
+# The GitHub Copilot CLI from its official installer, unless it is already
+# there, then without an older pnpm copy.
+ensure_copilot() {
+  local bin=$HOME/.local/bin/copilot
+  if [ ! -x "$bin" ]; then
+    command -v curl >/dev/null 2>&1 || die "curl is required to install the GitHub Copilot CLI"
+    command -v setsid >/dev/null 2>&1 || die "setsid is required to install the GitHub Copilot CLI without prompts"
+    say "installing the GitHub Copilot CLI with its official installer"
+    curl -fsSL --proto-redir '=https' "$COPILOT_INSTALL_URL" \
+      | PREFIX="$HOME/.local" PATH="$HOME/.local/bin:$PATH" setsid -w bash >/dev/null \
+      || die "cannot install the GitHub Copilot CLI from $COPILOT_INSTALL_URL (offline?)"
+    [ -x "$bin" ] || die "the GitHub Copilot CLI installer did not create $bin"
+    "$bin" --version >/dev/null 2>&1 </dev/null || die "$bin --version fails after the GitHub Copilot CLI installer"
+  fi
+  remove_pnpm_global copilot @github/copilot
 }
 
 # Claude Code from its native installer, unless its launcher is already there.
@@ -155,8 +203,8 @@ main() {
   # pnpm refuses global commands while its global bin directory is not on
   # PATH: $PNPM_HOME/bin for pnpm 11+, $PNPM_HOME for older pnpm.
   export PATH="$PNPM_HOME/bin:$PNPM_HOME:$PATH"
-  ensure_pnpm_global pi --ignore-scripts @earendil-works/pi-coding-agent
-  ensure_pnpm_global copilot @github/copilot
+  ensure_pi
+  ensure_copilot
   ensure_claude
 }
 
