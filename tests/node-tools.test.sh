@@ -1,28 +1,32 @@
 #!/usr/bin/env bash
 # Behavior checks for the unpinned agent CLIs Home Manager installs at switch
 # time on Linux (tools/node-tools.sh, run by home.nix's nodeTools activation):
-# on the WSL2 workstation nvm, Node.js LTS as nvm's default, and pnpm; in both
-# profiles Pi, the GitHub Copilot CLI, and Claude Code from their own
-# installers, all unpinned.
+# in both profiles herdr from its vendor's installer; on the WSL2 workstation
+# nvm, Node.js LTS as nvm's default, and pnpm; in both profiles Pi, the GitHub
+# Copilot CLI, and Claude Code from their own installers, all unpinned.
 #
-# nvm, its install script, npm, pnpm, and the Pi, Copilot, and Claude Code
-# install scripts are local fakes that log what they are asked to do, so
-# nothing is downloaded. Like the real ones, the fake nvm.sh is not
-# errexit/nounset clean, the fake pnpm refuses global commands while its
-# global bin directory is off PATH, the fake Pi installer refuses to replace a
-# pi it did not install (pnpm's, or a Windows one under /mnt) and links
-# ~/.local/bin/pi to its launcher in ~/.pi/agent/bin, and the fake Copilot and Claude Code installers put their
+# nvm, its install script, npm, pnpm, and the herdr, Pi, Copilot, and Claude
+# Code install scripts are local fakes that log what they are asked to do, so
+# nothing is downloaded, except by the one check that runs herdr's real
+# installer. Like the real ones, the fake nvm.sh is not errexit/nounset clean,
+# the fake pnpm refuses global commands while its global bin directory is off
+# PATH, the fake herdr installer puts herdr in $HERDR_INSTALL_DIR, the fake Pi
+# installer refuses to replace a pi it did not install (pnpm's, or a Windows
+# one under /mnt) and links ~/.local/bin/pi to its launcher in
+# ~/.pi/agent/bin, and the fake Copilot and Claude Code installers put their
 # launchers in ~/.local/bin (Copilot's in $PREFIX/bin).
 #
 # Coverage:
-# - workstation, fresh HOME: nvm from its install script with PROFILE=/dev/null
-#   (no rc file touched), `nvm install --lts` as nvm's default, pnpm, then the
-#   Pi and Copilot (PREFIX=~/.local) installers, each without a controlling
-#   terminal, and Claude Code's installer, with $NVM_DIR/default linked to nvm's default
+# - workstation, fresh HOME: herdr's installer into ~/.local/bin, then nvm
+#   from its install script with PROFILE=/dev/null (no rc file touched),
+#   `nvm install --lts` as nvm's default, pnpm, then the Pi and Copilot
+#   (PREFIX=~/.local) installers, each without a controlling terminal, and
+#   Claude Code's installer, with $NVM_DIR/default linked to nvm's default
 #   Node.js and nothing in pnpm's global bin; a re-run installs nothing and
 #   prints nothing;
-# - container: only the three installers, with the pnpm already on PATH;
-#   without pnpm, or offline, the script fails with one clear message;
+# - container: only the four installers, with the pnpm already on PATH;
+#   without pnpm it still installs herdr, then fails with one clear message,
+#   as it does offline;
 # - a container that an older switch gave pnpm's Pi and Copilot, with a
 #   Windows pi on PATH: Pi's installer runs without either on its PATH, and
 #   each pnpm copy is removed right after its installer, so ~/.local/bin/pi
@@ -30,8 +34,11 @@
 #   cannot be downloaded, pnpm's Pi stays;
 # - a failing Pi installer shows its own output, fails the run, and keeps
 #   pnpm's Pi;
-# - a Claude Code that does not answer --version after its installer fails
-#   the run;
+# - a herdr or Claude Code that does not answer --version after its installer
+#   fails the run;
+# - herdr's real installer (https://herdr.dev/install.sh, skipped offline)
+#   installs herdr's latest release as ~/.local/bin/herdr, which accepts
+#   home/.config/herdr/config.toml; a re-run is a quiet no-op;
 # - both profiles' nodeTools activation runs after writeBoundary with the
 #   right mode, only warns on failure so the switch completes, and the
 #   container activation keeps the user's PATH for the image's pnpm;
@@ -39,11 +46,12 @@
 #   PATH; in both profiles every zsh (interactive or not) and a bash login
 #   shell, fresh or started from an environment that already marks the
 #   session variables sourced without PNPM_HOME or NVM_DIR, find ~/.local/bin
-#   (claude, pi, copilot) and pnpm's global bin right after
-#   ~/.nix-profile/bin (herdr), once and ahead of system and Windows-interop
-#   copies, with no empty PATH entry, and on the workstation also nvm's
-#   default Node.js bin ($NVM_DIR/default/bin) between them; the container
-#   never puts nvm on PATH.
+#   (herdr, claude, pi, copilot) and pnpm's global bin right before
+#   ~/.nix-profile/bin, once and ahead of a Nix-built herdr left there and of
+#   system and Windows-interop copies, with no empty PATH entry, and on the
+#   workstation also nvm's default Node.js bin ($NVM_DIR/default/bin) between
+#   them; the container never puts nvm on PATH; the interactive zsh loads the
+#   installed herdr's completions.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -53,6 +61,7 @@ dotfiles_test_tmproot node-tools
 FAKE_NODE=v24.99.0
 PI_INSTALL="pi-installer tty=no"
 COPILOT_INSTALL="copilot-installer tty=no"
+HERDR_INSTALL="herdr-installer"
 CLAUDE_INSTALL="claude-installer"
 PI_REMOVE="pnpm remove -g @earendil-works/pi-coding-agent"
 COPILOT_REMOVE="pnpm remove -g @github/copilot"
@@ -218,7 +227,27 @@ printf '#!/bin/sh\necho copilot-fake\n' >"$PREFIX/bin/copilot"
 chmod +x "$PREFIX/bin/copilot"
 EOF
 
+# A stand-in for herdr's install script (run with sh): like the real one, it
+# puts the binary at $HERDR_INSTALL_DIR/herdr (default ~/.local/bin). The fake
+# herdr prints zsh completions that register _herdr.
+cat >"$FIX/herdr-install.sh" <<'EOF'
+set -e
+dir=${HERDR_INSTALL_DIR:-$HOME/.local/bin}
+[ "$dir" = "$HOME/.local/bin" ] || { echo "fake herdr installer: HERDR_INSTALL_DIR=$dir" >&2; exit 1; }
+echo herdr-installer >>"$NODE_TOOLS_LOG"
+mkdir -p "$dir"
+cat >"$dir/herdr" <<'HERDR'
+#!/bin/sh
+case "$*" in
+  "completion zsh") echo '_herdr() { :; }; compdef _herdr herdr' ;;
+  *) echo herdr-fake ;;
+esac
+HERDR
+chmod +x "$dir/herdr"
+EOF
+
 export NVM_INSTALL_URL="file://$FIX/install.sh"
+export HERDR_INSTALL_URL="file://$FIX/herdr-install.sh"
 export PI_INSTALL_URL="file://$FIX/pi-install.sh"
 export COPILOT_INSTALL_URL="file://$FIX/copilot-install.sh"
 export CLAUDE_INSTALL_URL="file://$FIX/claude-install.sh"
@@ -234,9 +263,12 @@ calls() {
   cat "$NODE_TOOLS_LOG" 2>/dev/null
 }
 
-INSTALLS="$PI_INSTALL
+# What a switch installs after herdr, then everything a container gets.
+AFTER_NODE="$PI_INSTALL
 $COPILOT_INSTALL
 $CLAUDE_INSTALL"
+INSTALLS="$HERDR_INSTALL
+$AFTER_NODE"
 
 # --- tools/node-tools.sh --------------------------------------------------------
 
@@ -245,12 +277,13 @@ test_workstation_fresh_then_quiet() {
   mkdir -p "$home"
   : >"$NODE_TOOLS_LOG"
   out=$(run_tools "$home" workstation "$BASE_PATH") || fail "workstation on a fresh HOME failed: $out"
-  [ "$(calls)" = "nvm-installer PROFILE=/dev/null
+  [ "$(calls)" = "$HERDR_INSTALL
+nvm-installer PROFILE=/dev/null
 nvm install --lts --no-progress
 nvm alias default lts/*
 npm install -g pnpm
-$INSTALLS" ] || fail "workstation did not install nvm, Node.js LTS as default, pnpm, then Pi, Copilot, and Claude Code without a terminal, in order: $(calls)"
-  for tool in pi copilot claude; do
+$AFTER_NODE" ] || fail "workstation did not install herdr, nvm, Node.js LTS as default, pnpm, then Pi, Copilot, and Claude Code without a terminal, in order: $(calls)"
+  for tool in herdr pi copilot claude; do
     [ "$("$home/.local/bin/$tool" --version)" = "$tool-fake" ] || fail "$tool does not run from ~/.local/bin"
     [ ! -e "$home/.local/share/pnpm/bin/$tool" ] || fail "workstation installed $tool with pnpm"
   done
@@ -263,7 +296,7 @@ $INSTALLS" ] || fail "workstation did not install nvm, Node.js LTS as default, p
   out=$(run_tools "$home" workstation "$BASE_PATH") || fail "workstation re-run failed: $out"
   [ -z "$(calls)" ] || fail "a workstation re-run reinstalled something: $(calls)"
   [ -z "$out" ] || fail "a workstation re-run is not quiet: $out"
-  pass "workstation: nvm (PROFILE=/dev/null), Node.js LTS as default, pnpm, then Pi, Copilot, and Claude Code from their installers without a terminal; re-runs install and print nothing"
+  pass "workstation: herdr from its installer, nvm (PROFILE=/dev/null), Node.js LTS as default, pnpm, then Pi, Copilot, and Claude Code from their installers without a terminal; re-runs install and print nothing"
 }
 
 test_container_and_failures() {
@@ -272,8 +305,8 @@ test_container_and_failures() {
   : >"$NODE_TOOLS_LOG"
   out=$(PNPM_HOME="$home/pnpm-home" run_tools "$home" container "$FIX/pnpm-only:$BASE_PATH") \
     || fail "container with pnpm on PATH failed: $out"
-  [ "$(calls)" = "$INSTALLS" ] || fail "container did not only run the Pi, Copilot, and Claude Code installers: $(calls)"
-  for tool in pi copilot claude; do
+  [ "$(calls)" = "$INSTALLS" ] || fail "container did not only run the herdr, Pi, Copilot, and Claude Code installers: $(calls)"
+  for tool in herdr pi copilot claude; do
     [ -x "$home/.local/bin/$tool" ] || fail "container did not install $tool into ~/.local/bin"
   done
   [ ! -e "$home/.nvm" ] || fail "container installed nvm"
@@ -287,6 +320,12 @@ test_container_and_failures() {
     fail "container without pnpm succeeded: $out"
   fi
   assert_contains "$out" "pnpm not found on PATH" "missing pnpm is not reported clearly: $out"
+  [ -x "$TMP_ROOT/ct-nopnpm/.local/bin/herdr" ] || fail "container without pnpm did not install herdr first"
+
+  if out=$(HERDR_INSTALL_URL="file://$TMP_ROOT/missing.sh" run_tools "$TMP_ROOT/ct-noherdr" container "$FIX/pnpm-only:$BASE_PATH"); then
+    fail "container without herdr's install script succeeded: $out"
+  fi
+  assert_contains "$out" "cannot install herdr" "a failed herdr download is not reported: $out"
 
   if out=$(PI_INSTALL_URL="file://$TMP_ROOT/missing.sh" PNPM_HOME="$TMP_ROOT/ct-offline/pnpm" \
     run_tools "$TMP_ROOT/ct-offline" container "$FIX/pnpm-only:$BASE_PATH"); then
@@ -310,7 +349,7 @@ test_container_and_failures() {
     fail "container without Claude Code's install script succeeded: $out"
   fi
   assert_contains "$out" "cannot install Claude Code" "a failed Claude Code download is not reported: $out"
-  pass "container: only the Pi, Copilot, and Claude Code installers; no pnpm or no network fails with one clear message"
+  pass "container: only the herdr, Pi, Copilot, and Claude Code installers; no pnpm or no network fails with one clear message"
 }
 
 test_migrate_pnpm_copies() {
@@ -364,21 +403,50 @@ test_pi_installer_failure() {
   pass "a failing Pi installer shows its own output, fails the run, and keeps pnpm's Pi"
 }
 
-test_claude_must_run() {
-  local home="$TMP_ROOT/claude-broken" out
-  mkdir -p "$home"
-  # An installer that leaves a launcher which cannot run.
-  cat >"$FIX/claude-broken.sh" <<'EOF'
-mkdir -p "$HOME/.local/bin"
-printf '#!/bin/sh\nexit 1\n' >"$HOME/.local/bin/claude"
-chmod +x "$HOME/.local/bin/claude"
+test_cli_must_run() {
+  local tool home out url_var
+  for tool in herdr claude; do
+    home="$TMP_ROOT/$tool-broken"
+    mkdir -p "$home"
+    # An installer that leaves a binary which cannot run.
+    cat >"$FIX/$tool-broken.sh" <<EOF
+mkdir -p "\$HOME/.local/bin"
+printf '#!/bin/sh\\nexit 1\\n' >"\$HOME/.local/bin/$tool"
+chmod +x "\$HOME/.local/bin/$tool"
 EOF
-  if out=$(CLAUDE_INSTALL_URL="file://$FIX/claude-broken.sh" PNPM_HOME="$home/pnpm" \
-    run_tools "$home" container "$FIX/pnpm-only:$BASE_PATH"); then
-    fail "a claude that does not run was accepted: $out"
-  fi
-  assert_contains "$out" "claude --version fails after" "a broken claude is not reported: $out"
-  pass "a CLI that does not answer --version after it is installed fails the run"
+    url_var="$(tr '[:lower:]' '[:upper:]' <<<"$tool")_INSTALL_URL"
+    if out=$(export "$url_var=file://$FIX/$tool-broken.sh"; PNPM_HOME="$home/pnpm" \
+      run_tools "$home" container "$FIX/pnpm-only:$BASE_PATH"); then
+      fail "a $tool that does not run was accepted: $out"
+    fi
+    assert_contains "$out" "$tool --version fails after" "a broken $tool is not reported: $out"
+  done
+  pass "a herdr or Claude Code that does not answer --version after it is installed fails the run"
+}
+
+# herdr's real installer, as a switch runs it, in a scratch HOME.
+test_real_herdr_installer() {
+  local home="$TMP_ROOT/herdr-real" latest out
+  latest=$(curl -fsSL --connect-timeout 10 https://herdr.dev/latest.json 2>/dev/null | jq -r '.version // empty' 2>/dev/null)
+  [ -n "$latest" ] || { echo "skip: https://herdr.dev is unreachable"; return 0; }
+  mkdir -p "$home"
+  : >"$NODE_TOOLS_LOG"
+  out=$(HERDR_INSTALL_URL=https://herdr.dev/install.sh PNPM_HOME="$home/pnpm" \
+    run_tools "$home" container "$FIX/pnpm-only:$BASE_PATH") || fail "herdr's real installer failed: $out"
+  [ "$(calls)" = "$AFTER_NODE" ] || fail "the real herdr install ran fakes other than the Pi, Copilot, and Claude Code installers: $(calls)"
+  [ "$(HOME=$home "$home/.local/bin/herdr" --version </dev/null)" = "herdr $latest" ] \
+    || fail "$home/.local/bin/herdr is not herdr's latest release $latest"
+  [ "$(HOME=$home HERDR_CONFIG_PATH="$ROOT/home/.config/herdr/config.toml" "$home/.local/bin/herdr" config check </dev/null)" = "config: ok" ] \
+    || fail "herdr rejects home/.config/herdr/config.toml"
+  for rc in .bashrc .bash_profile .profile .zshrc .zprofile .zshenv; do
+    [ ! -e "$home/$rc" ] || fail "herdr's installer wrote $rc, which Home Manager owns"
+  done
+
+  : >"$NODE_TOOLS_LOG"
+  out=$(HERDR_INSTALL_URL=https://herdr.dev/install.sh PNPM_HOME="$home/pnpm" \
+    run_tools "$home" container "$FIX/pnpm-only:$BASE_PATH") || fail "a re-run after the real herdr install failed: $out"
+  [ -z "$(calls)$out" ] || fail "a re-run after the real herdr install was not a quiet no-op: $(calls) $out"
+  pass "herdr's real installer puts herdr $latest at ~/.local/bin/herdr, which accepts the repo's herdr config; re-runs keep it and print nothing"
 }
 
 # --- Home Manager ---------------------------------------------------------------
@@ -441,6 +509,7 @@ test_activation() {
   out=$(run_activation "$WS" "$home" "$BASE_PATH") || fail "$WS: activation failed: $out"
   assert_not_contains "$out" "WARN" "$WS: a working activation warns: $out"
   assert_contains "$(calls)" "nvm install --lts" "$WS: activation did not provision Node.js: $(calls)"
+  assert_contains "$(calls)" "$HERDR_INSTALL" "$WS: activation did not install herdr: $(calls)"
   assert_contains "$(calls)" "$CLAUDE_INSTALL" "$WS: activation did not install Claude Code: $(calls)"
 
   home="$TMP_ROOT/act-ct"
@@ -453,7 +522,8 @@ test_activation() {
   : >"$NODE_TOOLS_LOG"
   out=$(PNPM_HOME="$home/pnpm" run_activation "$CT" "$home" "$FIX/pnpm-only:$BASE_PATH") \
     || fail "$CT: activation with the image's pnpm failed: $out"
-  [ "$(calls)" = "$INSTALLS" ] || fail "$CT: activation did not use the image's pnpm: $(calls)"
+  # herdr is there from the run without pnpm.
+  [ "$(calls)" = "$AFTER_NODE" ] || fail "$CT: activation did not use the image's pnpm: $(calls)"
   pass "nodeTools runs after writeBoundary in both profiles, uses the container's own pnpm, and only warns on failure"
 }
 
@@ -462,16 +532,15 @@ test_activation() {
 TOOLS="herdr node npm pnpm claude pi copilot"
 
 # Checks shell $2's report $3 (NAME=first match, rawpath=PATH, then path=DIR lines) for
-# profile $1 in scratch HOME $4: herdr is the Nix profile's, claude, pi, and
-# copilot are the installers' launchers in ~/.local/bin, node, npm, and
-# pnpm are from $5 on the workstation, and ~/.local/bin, the nvm default bin
-# (workstation), and the pnpm dirs sit right after ~/.nix-profile/bin, once
-# each, and PATH has no empty entry.
+# profile $1 in scratch HOME $4: herdr, claude, pi, and copilot are the
+# installers' launchers in ~/.local/bin, not the Nix-built herdr left in
+# ~/.nix-profile/bin, node, npm, and pnpm are from $5 on the workstation, and
+# ~/.local/bin, the nvm default bin (workstation), and the pnpm dirs sit right
+# before ~/.nix-profile/bin, once each, and PATH has no empty entry.
 check_shell() {
   local profile=$1 shell=$2 out=$3 home=$4 node_dir=${5-} tool dir front path
   local pnpm_home="$home/.local/share/pnpm"
-  grep -qxF "herdr=$home/.nix-profile/bin/herdr" <<<"$out" || fail "$profile $shell: herdr is not the Nix profile's: $out"
-  for tool in claude pi copilot; do
+  for tool in herdr claude pi copilot; do
     grep -qxF "$tool=$home/.local/bin/$tool" <<<"$out" || fail "$profile $shell: $tool is not its installer's launcher: $out"
   done
   front="$pnpm_home/bin:$pnpm_home"
@@ -491,7 +560,7 @@ check_shell() {
     "" | :* | *: | *::*) fail "$profile $shell: PATH is empty or has an empty entry: $out" ;;
   esac
   path=":$(sed -n 's/^path=//p' <<<"$out" | tr '\n' ':')"
-  assert_contains "$path" ":$home/.nix-profile/bin:$front:" "$profile $shell: $front is not right after ~/.nix-profile/bin: $path"
+  assert_contains "$path" ":$front:$home/.nix-profile/bin:" "$profile $shell: $front is not right before ~/.nix-profile/bin: $path"
   for dir in ${front//:/ }; do
     [ "$(grep -cxF "path=$dir" <<<"$out")" = 1 ] || fail "$profile $shell: $dir is not on PATH exactly once: $path"
   done
@@ -513,8 +582,9 @@ test_shell_path() {
     files=$(nix build --no-link --print-out-paths "$ROOT#homeConfigurations.\"$profile\".config.home-files" 2>/dev/null) \
       || fail "$profile: home-files build failed"
     home="$TMP_ROOT/sh-${profile//[@\/]/-}"
+    # The Nix-built herdr an older switch installed.
     mkdir -p "$home/.nix-profile/bin"
-    printf '#!/bin/sh\necho herdr-fake\n' >"$home/.nix-profile/bin/herdr"
+    printf '#!/bin/sh\necho nix-herdr\n' >"$home/.nix-profile/bin/herdr"
     chmod +x "$home/.nix-profile/bin/herdr"
     case "$profile" in
       *@container-*) PNPM_HOME="$home/.local/share/pnpm" run_tools "$home" container "$FIX/pnpm-only:$BASE_PATH" >/dev/null ;;
@@ -537,9 +607,10 @@ test_shell_path() {
     for stale in "" "__HM_SESS_VARS_SOURCED=1 __HM_ZSH_SESS_VARS_SOURCED=1"; do
       # shellcheck disable=SC2016,SC2086 # expanded by the scratch zsh; $stale splits into assignments
       out=$(env -i $stale HOME="$home" ZDOTDIR="$home" TERM=xterm PATH="$start" zsh -d -i -c \
-        'for c in '"$TOOLS"'; do print -r -- "$c=$(whence -p $c)"; done; print -r -- "rawpath=$PATH"; for p in $path; do print -r -- "path=$p"; done' \
+        'for c in '"$TOOLS"'; do print -r -- "$c=$(whence -p $c)"; done; print -r -- "rawpath=$PATH"; for p in $path; do print -r -- "path=$p"; done; print -r -- "herdr-completion=${_comps[herdr]-}"' \
         </dev/null 2>/dev/null)
       check_shell "$profile" "interactive zsh${stale:+ ($stale)}" "$out" "$home" "$home/.nvm/versions/node/$FAKE_NODE/bin"
+      grep -qxF "herdr-completion=_herdr" <<<"$out" || fail "$profile interactive zsh${stale:+ ($stale)}: herdr's completions are not loaded: $out"
       # shellcheck disable=SC2016,SC2086 # expanded by the scratch zsh; $stale splits into assignments
       out=$(env -i $stale HOME="$home" ZDOTDIR="$home" PATH="$start" zsh -d -c \
         'for c in '"$TOOLS"'; do print -r -- "$c=$(whence -p $c)"; done; print -r -- "rawpath=$PATH"; for p in $path; do print -r -- "path=$p"; done' \
@@ -552,13 +623,14 @@ test_shell_path() {
       check_shell "$profile" "bash login${stale:+ ($stale)}" "$out" "$home" "$node_default"
     done
   done
-  pass "in both profiles every zsh and a bash login shell, fresh or from an environment that already sourced the session variables, run herdr from ~/.nix-profile/bin, then claude, pi, and copilot from ~/.local/bin, with pnpm's global bins, right after it and ahead of system and Windows copies, once each; the workstation adds nvm's default node, npm, and pnpm there, and its interactive zsh loads nvm"
+  pass "in both profiles every zsh and a bash login shell, fresh or from an environment that already sourced the session variables, run herdr, claude, pi, and copilot from ~/.local/bin, with pnpm's global bins, right before ~/.nix-profile/bin and ahead of its leftover herdr and of system and Windows copies, once each; the workstation adds nvm's default node, npm, and pnpm there, and its interactive zsh loads nvm; the interactive zsh loads herdr's completions"
 }
 
 test_workstation_fresh_then_quiet
 test_container_and_failures
 test_migrate_pnpm_copies
 test_pi_installer_failure
-test_claude_must_run
+test_cli_must_run
+test_real_herdr_installer
 test_activation
 test_shell_path
