@@ -194,9 +194,10 @@ To check without applying, `bash tests/upstream-tools.test.sh` checks that neith
 ### Git identity
 
 `identity.env` applies to the **Linux workstation (including WSL2) and the
-devcontainer only**. macOS keeps its existing SSH aliases and key paths and its
-unmanaged Git configuration unchanged for now; macOS identity support is a
-separate follow-up.
+devcontainer only**. macOS Git configuration remains unmanaged: set your name
+and email with `git config --global user.name "Your Name"` and
+`git config --global user.email you@example.com`. Its SSH setup is described in
+[SSH](#ssh-workstation-profile); macOS identity support is a separate follow-up.
 
 On Linux, no personal identity value lives in this public repo. Your names,
 emails, the GitHub organisations and Bitbucket workspaces you work in, and the
@@ -209,8 +210,9 @@ not from the folder it sits in:
   It writes `~/.config/git/identities.gitconfig`, which `programs.git` includes,
   with one `includeIf "hasconfig:remote.*.url:..."` rule per owner and per URL
   spelling (`git@host:owner/**`, `ssh://git@host/owner/**`, `https://host/owner/**`,
-  `https://user@host/owner/**`, and the same for a legacy SSH alias when you set
-  one), each pointing at `~/.config/git/identity/<label>.gitconfig`: `user.name`,
+  `https://user@host/owner/**`, plus `git@alias:owner/**` and
+  `ssh://git@alias/owner/**` when you set a legacy SSH alias), each pointing at
+  `~/.config/git/identity/<label>.gitconfig`: `user.name`,
   `user.email`, and `core.sshCommand = ssh -i '<key>' -o IdentitiesOnly=yes`
   (with `-F ~/.ssh/config.d/identities` in the container so legacy aliases resolve).
 - `programs.git` itself only sets `user.useConfigOnly = true` (a repo whose owner
@@ -223,9 +225,10 @@ not from the folder it sits in:
   `IDENTITIES`, and owners match case-sensitively, as spelled in the remote URL.
 - The rendered files are rewritten only when their content changes, and removed
   when `identity.env` goes away. Edit `identity.env`, never the rendered files.
-- `git config --global` fails on the read-only Home Manager file: that is
-  intended. `GIT_CONFIG_GLOBAL` set, or a `~/.gitconfig` with `user.`, `includeIf.`
-  or `url.` keys, including keys reached through its includes (git reads it last),
+- `git config --global` writes fail on the read-only Home Manager file; reads
+  still work. That is intended. `GIT_CONFIG_GLOBAL` set, or a `~/.gitconfig` with
+  `user.`, `includeIf.` or `url.` keys, including keys reached through its
+  includes (git reads it last),
   would mask the identities, so the check flags both. Unreadable or malformed
   Git configuration is reported separately.
 
@@ -239,11 +242,12 @@ interactive zsh, with one line) says there is no identity file yet. Then:
    as in the remote URL), `<label>_KEY` (the private key's absolute or `~/` path), `<label>_NAME`,
    `<label>_EMAIL`, and optionally `<label>_ALIAS` (a legacy SSH host alias such as
    `github.com-work`, for old `git@github.com-work:org/repo` remotes). The file is
-   parsed, never sourced, so `$(...)` and variables are not expanded; `_KEY` may
-   only contain letters, digits, `.`, `_`, `/`, `-` (and a leading `~`), and names
-   and emails may not contain `"` or `\`. A bad value is reported and that identity skipped.
+   parsed, never sourced: surrounding double quotes are stripped, but `$(...)`
+   and variables are not expanded. `_KEY` may only contain letters, digits,
+   `.`, `_`, `/`, `-` (and a leading `~`), and names and emails may not contain
+   `"` or `\`. A bad value is reported and that identity skipped.
 3. Switch (`./rebuild.sh`). The check prints the exact command for each problem and
-   never runs it: the `ssh-keygen -t ed25519 -C "<email>" -f <key>` for a missing key
+   never runs it: the `ssh-keygen -t ed25519 -C '<email>' -f <key>` for a missing key
    plus where to register its `.pub`, `chmod 600` for a loose key, `ssh-add <key>`
    for a key the agent lacks, and so on. Run the command, then switch again, or
    re-check any time with `~/.dotfiles/activation/identity.sh check workstation`
@@ -251,12 +255,10 @@ interactive zsh, with one line) says there is no identity file yet. Then:
 
 **Secrets.** Private keys are never created, read, copied, or printed by this
 tooling: it only tests that a key file exists and its mode, and reads the `.pub`
-beside it. The workstation switch also exports each identity's `.pub` (only if it
-really is an OpenSSH public key) to `~/.config/dotfiles/pub/<label>.pub`, and
-writes the dotfiles revision it applied to `~/.config/dotfiles/applied-rev`; a
-devcontainer that mounts `~/.config/dotfiles` read-only gets the same git
-identities, selecting keys in the forwarded agent by those public halves
-(`identity.sh render container`), and its `hm-update` follows `applied-rev`.
+beside it. The workstation switch also exports each identity's `.pub` (only if
+its first token is an OpenSSH public-key type) to
+`~/.config/dotfiles/pub/<label>.pub`. For container sharing and revision
+following, see [Devcontainers](#devcontainers).
 `identity.env` is in `.gitignore` in case you ever copy it into the repo.
 
 `bash tests/identity.test.sh` covers the renderer and checks against scratch
@@ -268,7 +270,8 @@ from a read-only directory, `GIT_CONFIG_GLOBAL`, bad values, and stale outputs.
 
 On macOS, `programs.ssh` keeps the existing `github.com-personal`,
 `github.com-work`, and `bitbucket.org-work` aliases and their hard-coded key paths.
-There is no identities Include, renderer, or missing-identity notice there.
+To adapt them, edit `sshKeys` and `programs.ssh.settings` in `home.nix`, and put
+your private keys in `~/.ssh` yourself (mode 600).
 
 On the Linux workstation, `programs.ssh` writes `~/.ssh/config`: the `*` defaults
 this repo has always kept and an `Include ~/.ssh/config.d/identities`, which
@@ -320,12 +323,19 @@ name order, silently. The rules:
 `home.nix` takes a `profile` argument. The `container` profile reuses everything
 (zsh, starship, packages, tools) but drops the host SSH machinery - no agent
 service, no `~/.ssh/config`, no startup key loading - because a container has no
-systemd and borrows the host's keys and agent instead. The devcontainer, defined
-in `cloud-practitioner/agentic-devcontainer`, bind-mounts the host's `~/.ssh`
-read-only and proxies the WSL2 ssh-agent socket into the container, under both
-VS Code and the devcontainer CLI. The host's `~/.ssh/config` is a Nix-store
-symlink that dangles inside the container, so that repo's `Dockerfile` recreates
-the host aliases.
+systemd and uses the forwarded workstation agent instead. Identity sharing
+requires the workstation's `~/.config/dotfiles` mounted read-only at the same
+home-relative path in the container, plus the agent socket exposed through
+`SSH_AUTH_SOCK`. This directory contains the non-secret identity file and the
+exported public halves described in [Git identity](#git-identity); do not mount
+`~/.ssh` or copy private keys into the container. The renderer selects agent
+keys using those public halves and supplies its own SSH alias include for Git.
+
+Mount and socket wiring is managed separately in
+`cloud-practitioner/agentic-devcontainer`. Images that still mount `~/.ssh` or
+recreate hard-coded aliases must be adapted to the public-key-only contract
+before using identity sharing. Without the identity directory or a reachable
+forwarded agent, the switch warns with workstation setup guidance.
 
 `flake.nix` exposes both profiles as home-manager configs:
 
@@ -339,12 +349,15 @@ The devcontainer image installs no coding-agent CLIs: the container profile
 provides herdr, Claude Code, Pi, and the GitHub Copilot CLI (their own
 installers, unpinned), as
 [Upstream CLI tools](#upstream-cli-tools) describes. Inside
-a container, `hm-update` follows the workstation: it fetches `~/.dotfiles` and
-checks out the revision the workstation last applied
-(`~/.config/dotfiles/applied-rev`, from the mounted identity directory), then
-re-switches the container profile. With no such mount it pulls `main`
-fast-forward instead. It is defined only in the container profile, and a new
-terminal's welcome note reminds you of it; `bash tests/hm-update.test.sh` checks it.
+a container, `hm-update` fetches `~/.dotfiles` and makes a detached checkout of
+`~/.config/dotfiles/applied-rev`, which the workstation writes on every switch
+from the flake revision. A `-dirty` suffix warns and uses its base commit, not
+the workstation's uncommitted edits; an unavailable revision warns and falls
+back to `origin/main`. With no readable, nonempty revision file, it pulls
+fast-forward on the current branch (returning a detached checkout to `main`
+first). It then re-switches the container profile. The shortcut exists only in
+the container profile, and a new terminal's welcome note reminds you of it;
+`bash tests/hm-update.test.sh` checks it.
 
 **Claude Code and `CLAUDE_CONFIG_DIR`.** Claude reads its user config from
 `$CLAUDE_CONFIG_DIR` when set (a devcontainer may point it into the workspace),
@@ -401,10 +414,7 @@ If you clone it, review these before you run `bootstrap.sh`:
   All three have to match.
 - **CPU architecture**, `hostPlatform` in `configuration.nix` (see Prerequisites above).
 - **Container users** (Linux): if a devcontainer's non-root user differs from your workstation username, add it to the `containerUsers` list in `flake.nix` so a `…@container-…` config exists for it.
-- **Git and SSH identity** (Linux/WSL2): nothing personal is in this repo. Copy `identity.env.example` to `~/.config/dotfiles/identity.env` and fill in your own names, emails, orgs, and key paths - see [Git identity](#git-identity). Create the private keys yourself; Nix doesn't manage secrets.
-
-**Git identity (Linux):** this config deliberately does not hard-code your git name or email.
-A repo whose remote owner matches no identity in `identity.env` makes git refuse the commit and say who it doesn't know, rather than guess one. macOS Git configuration is unchanged.
+- **Git and SSH identity**: follow [Git identity](#git-identity) for the Linux template walkthrough and macOS Git setup, and [SSH](#ssh-workstation-profile) for workstation keys and aliases.
 
 **Homebrew cleanup warning:** `configuration.nix` sets `homebrew.onActivation.cleanup = "zap"`.
 That means every time you switch, Homebrew removes any package or cask on your machine that isn't listed in the `brews` and `casks` arrays in `configuration.nix`.

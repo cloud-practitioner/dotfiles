@@ -2,14 +2,12 @@
 
 let
   dotfiles = "${config.home.homeDirectory}/.dotfiles";
-  # The "container" profile drops host-only SSH machinery (agent + aliased
-  # identities) so the same shell/tools can be reused inside a devcontainer
+  # The "container" profile drops the agent service, ~/.ssh/config, and startup
+  # key loading so the same shell/tools can be reused inside a devcontainer
   # that borrows the WSL2 host's forwarded agent instead.
   isWorkstation = profile == "workstation";
-  # Personal git and SSH identity values live in the Linux workstation's
-  # ~/.config/dotfiles/identity.env, never in this public repo. Activation
-  # renders them (activation/identity.sh); this is where the workstation zsh
-  # reads the key paths to load into an empty agent.
+  # Linux zsh reads the key list rendered by activation/identity.sh here;
+  # sshKeys below retains the existing macOS alias paths.
   identityDir = "$HOME/.config/dotfiles";
   sshKeys = {
     ghWork = "~/.ssh/id_ed25519_gh_work";
@@ -270,7 +268,7 @@ in
   # container profile gets no ~/.ssh/config from here.
   # Blocks use OpenSSH directive names (ssh_config(5)). Home Manager's legacy
   # defaults are off (enableDefaultConfig), so the `*` block spells out the
-  # ones this config always had, keeping ~/.ssh/config unchanged.
+  # ones this config always had, preserving the default SSH options.
   programs.ssh = lib.mkIf isWorkstation {
     enable = true;
     enableDefaultConfig = false;

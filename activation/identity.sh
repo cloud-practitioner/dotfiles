@@ -13,8 +13,8 @@
 #                      so a container can select agent keys without ever
 #                      seeing a private key
 #   $DOTFILES_REV      (workstation render) the dotfiles revision being applied
-# Outputs (generated; rewritten only when their content changes, removed when
-# identity.env goes away):
+# Outputs (generated; rewritten only when their content changes). Identity
+# outputs are removed when identity.env goes away; applied-rev is independent:
 #   ~/.config/git/identities.gitconfig   includeIf rules
 #   ~/.config/git/identity/<label>.gitconfig
 #   ~/.ssh/config.d/identities                                legacy aliases
@@ -53,6 +53,8 @@ declare -A V=()
 # are stripped; anything else on a line is an error.
 parse() {
   local line key val n=0
+  # tilde only formats the path in diagnostics; it never writes ID_FILE.
+  # shellcheck disable=SC2094
   while IFS= read -r line || [ -n "$line" ]; do
     n=$((n + 1))
     case "$line" in '' | '#'*) continue ;; esac
@@ -88,6 +90,8 @@ load() {
     valid "${l}_HOST" '^[A-Za-z0-9.-]+$' "${V[${l}_HOST]:-}" || ok=
     valid "${l}_OWNERS" '^[A-Za-z0-9._-]+( [A-Za-z0-9._-]+)*$' "${V[${l}_OWNERS]:-}" || ok=
     valid "${l}_KEY" '^~?[A-Za-z0-9._/-]+$' "${V[${l}_KEY]:-}" || ok=
+    # Match the literal ~/ prefix; validation must not expand it here.
+    # shellcheck disable=SC2088
     case "${V[${l}_KEY]:-}" in
       /* | '~/'*) ;;
       *) problem "${l}_KEY must start with / or ~/ (relative paths are not supported)"; ok= ;;
@@ -104,6 +108,8 @@ load() {
   LOAD_RC=0
 }
 
+# Match literal ~/ before explicitly expanding it for this HOME.
+# shellcheck disable=SC2088
 expand() { case "$1" in '~/'*) printf '%s\n' "$HOME/${1#'~/'}" ;; *) printf '%s\n' "$1" ;; esac; }
 
 git_quote() {
@@ -139,8 +145,7 @@ write_if_changed() { # path content
     || { rm -f "$1.tmp.$$"; problem "cannot write $(tilde "$1")"; return 1; }
 }
 
-# Removes the files in $1 matching the glob $2 whose label (name minus $3) is
-# not in the remaining arguments.
+# Removes files in $1 with suffix $2 whose label is not in the remaining arguments.
 prune() { # dir suffix label...
   local dir=$1 suffix=$2 f name l keep; shift 2
   for f in "$dir"/*"$suffix"; do
@@ -283,6 +288,8 @@ check() {
     git config --includes --file "$HOME/.gitconfig" --get-regexp '^(user\.|includeif\.|url\.)' >/dev/null 2>&1
     rc=$?
     if [ "$rc" = 0 ]; then
+      # The diagnostic deliberately shows a literal home-relative path.
+      # shellcheck disable=SC2088
       problem "~/.gitconfig sets user/includeIf/url keys that override these identities (git reads it last). Move them into $(tilde "$ID_FILE") and delete ~/.gitconfig."
     elif [ "$rc" != 1 ] || [ ! -r "$HOME/.gitconfig" ]; then
       problem "cannot inspect ~/.gitconfig or its includes. Run 'git config --includes --file ~/.gitconfig --list', then fix its parse/read errors."

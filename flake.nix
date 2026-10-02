@@ -36,9 +36,8 @@
       # set here because it lives in configuration.nix, which Linux never loads.
       # `profile` selects between a full workstation and a devcontainer that
       # reuses the same shell/tools but no host SSH machinery.
-      # dotfilesRev is the revision being applied (dirtyRev when the tree has
-      # uncommitted changes); the workstation records it so a container can
-      # check out the same revision (activation/identity.sh).
+      # The workstation records this for hm-update; README's Devcontainers
+      # section describes revision following and its fallbacks.
       dotfilesRev = self.rev or self.dirtyRev or "unknown";
 
       mkLinuxHome = { system, user, profile ? "workstation" }:
