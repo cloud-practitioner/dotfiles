@@ -247,6 +247,7 @@ runo "$WS" workstation check GIT_CONFIG_GLOBAL=
 out=$(cat "$OUT")
 [ "$RC" = 1 ] || fail "empty-but-set GIT_CONFIG_GLOBAL fails check"
 assert_contains "$out" 'GIT_CONFIG_GLOBAL= hides' "warns about empty-but-set GIT_CONFIG_GLOBAL"
+# shellcheck disable=SC2088 # diagnostic contains a literal tilde
 assert_contains "$out" "~/.gitconfig sets user/includeIf/url/core.sshCommand keys" "also warns about an overriding ~/.gitconfig"
 rm "$WS/.gitconfig"
 chmod 666 "$D/identity.env"
@@ -429,6 +430,7 @@ for profile in workstation container; do
   if [ "$profile" = workstation ]; then h=$Q; else h=$PC; fi
   git config --file "$h/.gitconfig" core.sshCommand "$legacy_command"
   [ "$(gitrun "$h" -C "$h" config core.sshCommand)" = "$legacy_command" ] || fail "Git consumes the direct legacy SSH command"
+  # shellcheck disable=SC2088 # diagnostic contains a literal tilde
   expect_config_problem "$h" "$profile" '~/.gitconfig sets user/includeIf/url/core.sshCommand keys'
   rm "$h/.gitconfig"
   git config --file "$h/.gitconfig" include.path legacy-parent.gitconfig
@@ -450,6 +452,7 @@ for profile in workstation container; do
     if [ "$field" = core.sshCommand ]; then
       [ "$(gitrun "$h" -C "$h" config core.sshCommand)" = "$legacy_command" ] || fail "Git consumes the nested legacy SSH command"
     fi
+    # shellcheck disable=SC2088 # diagnostic contains a literal tilde
     expect_config_problem "$h" "$profile" '~/.gitconfig sets user/includeIf/url/core.sshCommand keys'
   done
   rm -f "$h/legacy-leaf.gitconfig"

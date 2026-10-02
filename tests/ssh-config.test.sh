@@ -111,6 +111,7 @@ for profile in "$WS" "$CT"; do
   [ "$(git config --file "$gitcfg" --bool user.useConfigOnly)" = true ] || fail "$profile: git refuses to guess an identity"
   [ "$(git config --file "$gitcfg" --get-all url.git@github.com:.pushInsteadOf)" = https://github.com/ ] || fail "$profile: github.com push rewrite"
   [ "$(git config --file "$gitcfg" --get-all url.git@bitbucket.org:.pushInsteadOf)" = https://bitbucket.org/ ] || fail "$profile: bitbucket.org push rewrite"
+  # shellcheck disable=SC2088 # Git stores this include path with a literal tilde
   [ "$(git config --file "$gitcfg" --get-all include.path)" = '~/.config/git/identities.gitconfig' ] || fail "$profile: includes the rendered identities"
   if git config --file "$gitcfg" --get-regexp '^(includeif\.|url\..*\.insteadof$|gpg\.)' >/dev/null; then
     fail "$profile: no conditional global rules, clone rewrites or signing settings"
@@ -183,6 +184,7 @@ exit 1
 SHIM
 chmod +x "$H/mac_bin/ssh-add"
 : >"$H/mac_ssh_add.log"
+# shellcheck disable=SC2016 # expanded by the scratch zsh, not here
 env -i HOME="$H/mac_home" ZDOTDIR="$H/mac_home" PATH="$H/mac_bin:$PATH" TERM=xterm SSH_ADD_LOG="$H/mac_ssh_add.log" \
   zsh -f -i -c 'source "$HOME/init.zsh"' </dev/null >"$H/mac_shell.out" 2>&1 || fail "macOS interactive initialization runs"
 assert_not_contains "$(cat "$H/mac_shell.out")" 'identity.env' "macOS prints no missing-identity notice"

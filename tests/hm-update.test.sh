@@ -33,6 +33,7 @@ ORIGIN=$TMP_ROOT/origin
 mkdir -p "$H" "$TMP_ROOT/bin"
 {
   cat "$files/.zshrc"
+  # shellcheck disable=SC2016 # expanded by the scratch zsh, not here
   printf 'HISTFILE="$HOME/.zsh_history"\n'
 } >"$H/.zshrc"
 cp -L "$files/.zshenv" "$H/.zshenv"
@@ -57,7 +58,8 @@ hm_update() {
     zsh -i -c hm-update </dev/null >"$TMP_ROOT/out" 2>&1 \
     || fail "hm-update failed: $(cat "$TMP_ROOT/out")"
   HM_OUT=$(cat "$TMP_ROOT/out")
-  local expected="run --inputs-from $H/.dotfiles home-manager -- switch -b backup --flake $H/.dotfiles#$(id -un)@container-$SYSTEM"
+  local expected
+  expected="run --inputs-from $H/.dotfiles home-manager -- switch -b backup --flake $H/.dotfiles#$(id -un)@container-$SYSTEM"
   [ "$(cat "$TMP_ROOT/nix.log")" = "$expected" ] || fail "hm-update must switch the container profile with the locked Home Manager CLI"
 }
 head_of() { git -C "$H/.dotfiles" rev-parse HEAD; }
