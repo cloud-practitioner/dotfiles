@@ -36,13 +36,18 @@
       # set here because it lives in configuration.nix, which Linux never loads.
       # `profile` selects between a full workstation and a devcontainer that
       # reuses the same shell/tools but no host SSH machinery.
+      # dotfilesRev is the revision being applied (dirtyRev when the tree has
+      # uncommitted changes); the workstation records it so a container can
+      # check out the same revision (activation/identity.sh).
+      dotfilesRev = self.rev or self.dirtyRev or "unknown";
+
       mkLinuxHome = { system, user, profile ? "workstation" }:
         home-manager.lib.homeManagerConfiguration {
           pkgs = import nixpkgs {
             inherit system;
             config.allowUnfree = true;
           };
-          extraSpecialArgs = { inherit user profile; };
+          extraSpecialArgs = { inherit user profile dotfilesRev; };
           modules = [ ./home.nix ];
         };
 
@@ -73,7 +78,7 @@
             home-manager.useUserPackages = true;
             # macOS is always a workstation; the module system doesn't honor the
             # `profile ? ...` default in home.nix, so pass it explicitly here.
-            home-manager.extraSpecialArgs = { inherit user; profile = "workstation"; };
+            home-manager.extraSpecialArgs = { inherit user dotfilesRev; profile = "workstation"; };
             home-manager.users.${user} = import ./home.nix;
           }
         ];

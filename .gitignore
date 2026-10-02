@@ -17,6 +17,9 @@ result-*
 # Pi Calm is a runtime toggle; its local state file is never tracked
 /home/.pi/agent/calm
 
+# Personal git/SSH identity values live in ~/.config/dotfiles/identity.env, never in the repo
+identity.env
+
 # no-mistakes local validation state - never commit in this public repo
 .no-mistakes/
 

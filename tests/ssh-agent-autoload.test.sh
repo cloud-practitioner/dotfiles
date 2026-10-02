@@ -4,13 +4,16 @@
 # Builds each Linux home profile's generated files into the Nix store (never
 # activating them), then starts an interactive zsh against the generated
 # .zshenv and .zshrc with a scratch HOME. The scratch HOME holds throwaway keys
-# at the three aliased paths, and a throwaway ssh-agent listens where the
+# and an identity.env naming them, rendered by activation/identity.sh into the
+# key list the autoload reads; a throwaway ssh-agent listens where the
 # ssh-agent service puts its socket ($XDG_RUNTIME_DIR/ssh-agent). An ssh-add
 # shim on the shell's PATH logs each call before running the real ssh-add.
 #
 # Coverage:
 # - workstation, no agent running: no key is added;
-# - workstation, empty agent: all three keys are loaded;
+# - workstation, no identity.env yet: nothing is loaded and one line says how
+#   to create it;
+# - workstation, empty agent: all three keys are loaded, and the line is gone;
 # - workstation, agent already holding a key: the agent is left alone;
 # - workstation, Ctrl+C at a passphrase prompt: ssh-add is cancelled and the
 #   rest of .zshrc still runs;
@@ -27,6 +30,7 @@ done
 dotfiles_test_tmproot ssh-agent-autoload
 SYSTEM=$(nix eval --impure --raw --expr builtins.currentSystem)
 KEYS=(id_ed25519_gh_work id_ed25519_gh_personal id_ed25519_bb_work)
+LABELS=(gh_work gh_personal bb_work)
 
 AGENT_PID=
 cleanup() {
@@ -120,11 +124,30 @@ EOF
   [ -e "$files/.zshenv" ] && cp -L "$files/.zshenv" "$PROFILE_HOME/.zshenv"
 }
 
-# Runs an interactive zsh against the scratch HOME $1 until .zshrc has run.
+# Fills the scratch HOME $1 with an identity.env naming the three keys and
+# renders it, as the switch does, so the zsh autoload has its key list.
+write_identities() {
+  local home=$1 i
+  mkdir -p "$home/.config/dotfiles"
+  {
+    printf 'IDENTITIES="%s"\n' "${LABELS[*]}"
+    for i in 0 1 2; do
+      printf '%s_HOST=github.com\n%s_OWNERS="owner%s"\n%s_KEY=~/.ssh/%s\n%s_NAME="Test"\n%s_EMAIL="t@example.invalid"\n' \
+        "${LABELS[$i]}" "${LABELS[$i]}" "$i" "${LABELS[$i]}" "${KEYS[$i]}" "${LABELS[$i]}" "${LABELS[$i]}"
+    done
+  } >"$home/.config/dotfiles/identity.env"
+  chmod 600 "$home/.config/dotfiles/identity.env"
+  env -i HOME="$home" PATH="$PATH" bash "$ROOT/activation/identity.sh" render workstation >/dev/null 2>&1
+  [ -s "$home/.config/dotfiles/ssh-keys" ] || fail "identity render wrote the key list"
+}
+
+# Runs an interactive zsh against the scratch HOME $1 until .zshrc has run;
+# what it printed lands in SHELL_OUT.
+SHELL_OUT="$TMP_ROOT/shell.out"
 start_shell() {
   : >"$SHIM_LOG"
   HOME="$1" ZDOTDIR="$1" PATH="$TMP_ROOT/bin:$PATH" TERM=xterm \
-    zsh -i -c exit </dev/null >/dev/null 2>&1
+    zsh -i -c exit </dev/null >"$SHELL_OUT" 2>&1
 }
 
 assert_no_key_added() {
@@ -147,8 +170,17 @@ ssh-add -l >/dev/null 2>&1
 [ "$?" = 1 ] || fail "throwaway agent is reachable and empty"
 
 start_shell "$ws_home"
+assert_contains "$(cat "$SHELL_OUT")" "no ~/.config/dotfiles/identity.env yet" "$WS: no identity.env, one line says so"
+[ "$(grep -c 'identity.env yet' "$SHELL_OUT")" = 1 ] || fail "$WS: the identity.env line prints once"
+[ -z "$(agent_fingerprints)" ] || fail "$WS: no identity.env, no key is loaded"
+assert_no_key_added "$WS: no identity.env, no key is added"
+pass "$WS: no identity.env loads nothing and says how to create it"
+
+write_identities "$ws_home"
+start_shell "$ws_home"
 [ "$(agent_fingerprints)" = "$(key_fingerprints "${KEYS[@]}")" ] \
   || fail "$WS: empty agent gets all three keys"
+assert_not_contains "$(cat "$SHELL_OUT")" "identity.env yet" "$WS: with identity.env the line is gone"
 pass "$WS: empty agent gets all three keys"
 
 ssh-add -D >/dev/null 2>&1 || fail "empty the throwaway agent"
