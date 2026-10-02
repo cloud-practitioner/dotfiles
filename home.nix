@@ -112,8 +112,8 @@ in
   # tools), so tools/node-tools.sh finds the image's Node.js and pnpm.
   home.emptyActivationPath = lib.mkIf (pkgs.stdenv.isLinux && !isWorkstation) false;
 
-  # On macOS the nix-darwin module drives home-manager, but standalone Linux
-  # needs its own `home-manager` CLI (used by rebuild.sh).
+  # Keep the standalone CLI available on Linux for manual use; rebuild.sh
+  # deliberately does not rely on this installed copy.
   programs.home-manager.enable = pkgs.stdenv.isLinux;
 
   programs.zsh = {
@@ -187,7 +187,7 @@ in
           *) echo "unsupported $(uname -m)" >&2; return 1 ;;
         esac
         git -C "$HOME/.dotfiles" pull --ff-only || return 1
-        nix run github:nix-community/home-manager/release-26.05 -- switch -b backup --flake "$HOME/.dotfiles#$(id -un)@container-$sys"
+        nix run --inputs-from "$HOME/.dotfiles" home-manager -- switch -b backup --flake "$HOME/.dotfiles#$(id -un)@container-$sys"
       }
 
       # Cheap, non-blocking welcome note (once per terminal); no network calls.
