@@ -187,8 +187,8 @@ in
           aarch64|arm64) sys=aarch64-linux ;;
           *) echo "unsupported $(uname -m)" >&2; return 1 ;;
         esac
-        # Follow the workstation: check out the revision it applied (its
-        # identity directory is mounted here), else pull main.
+        # Read the mounted workstation revision; README's Devcontainers
+        # section owns revision-following behavior and its fallbacks.
         local rev
         rev=$(cat "$HOME/.config/dotfiles/applied-rev" 2>/dev/null)
         if [ -n "$rev" ]; then
@@ -199,7 +199,7 @@ in
             git -C "$HOME/.dotfiles" checkout -q --detach origin/main || return 1
           fi
         else
-          # No mount (older image): track main, even from a detached checkout.
+          # Without a revision, keep the current branch; leave detached HEAD for main.
           git -C "$HOME/.dotfiles" symbolic-ref -q HEAD >/dev/null || git -C "$HOME/.dotfiles" checkout -q main || return 1
           git -C "$HOME/.dotfiles" pull --ff-only || return 1
         fi
@@ -259,13 +259,7 @@ in
     };
   };
 
-  # SSH client config on the Linux workstation. The legacy per-host aliases and the
-  # key paths are personal, so they come from ~/.config/dotfiles/identity.env:
-  # activation/identity.sh renders ~/.ssh/config.d/identities, which is
-  # included here. The private keys are not managed by Nix - create them
-  # yourself (the activation prints the command). Git picks its identity and
-  # key by remote URL (programs.git below), so the aliases are optional. The
-  # container profile gets no ~/.ssh/config from here.
+  # See README's SSH section for Linux identity setup and the unchanged macOS aliases.
   # Blocks use OpenSSH directive names (ssh_config(5)). Home Manager's legacy
   # defaults are off (enableDefaultConfig), so the `*` block spells out the
   # ones this config always had, preserving the default SSH options.
@@ -308,14 +302,10 @@ in
     };
   };
 
-  # Git identity (name, email, SSH key) is chosen by the remote URL
-  # (includeIf hasconfig:remote.*.url, git >= 2.36) from rules that
-  # activation/identity.sh renders out of the workstation's
-  # ~/.config/dotfiles/identity.env into ~/.config/git/identities.gitconfig.
-  # The values are personal, so they never enter this public repo; git ignores
-  # the include while the file is missing, and useConfigOnly then refuses a
-  # commit instead of guessing an identity. No folder (gitdir:) rules and no
-  # insteadOf: clones stay anonymous HTTPS, and only pushes go over SSH.
+  # Personal identity values stay out of this public repo; see README's Git
+  # identity section for Linux remote routing and push transport rules.
+  # Git ignores a missing rendered include, so useConfigOnly must prevent
+  # commits with a guessed identity until setup is complete.
   programs.git = lib.mkIf pkgs.stdenv.isLinux {
     enable = true;
     # With stateVersion 24.11 Home Manager would otherwise add a gpg section.
