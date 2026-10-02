@@ -193,11 +193,17 @@ To check without applying, `bash tests/upstream-tools.test.sh` checks that neith
 
 ### Git identity
 
-No personal value lives in this public repo. Your names, emails, the GitHub
-organisations and Bitbucket workspaces you work in, and the paths of your SSH
-keys go in one non-secret file on the workstation, `~/.config/dotfiles/identity.env`,
-which every switch turns into git config. Git then picks the commit name, email,
-and SSH key from a repo's **remote URL**, not from the folder it sits in:
+`identity.env` applies to the **Linux workstation (including WSL2) and the
+devcontainer only**. macOS keeps its existing SSH aliases and key paths and its
+unmanaged Git configuration unchanged for now; macOS identity support is a
+separate follow-up.
+
+On Linux, no personal identity value lives in this public repo. Your names,
+emails, the GitHub organisations and Bitbucket workspaces you work in, and the
+paths of your SSH keys go in one non-secret file on the workstation,
+`~/.config/dotfiles/identity.env`, which every Linux switch turns into git config.
+Git then picks the commit name, email, and SSH key from a repo's **remote URL**,
+not from the folder it sits in:
 
 - `activation/identity.sh` runs on every Linux switch (`render`, then `check`).
   It writes `~/.config/git/identities.gitconfig`, which `programs.git` includes,
@@ -219,11 +225,11 @@ and SSH key from a repo's **remote URL**, not from the folder it sits in:
   when `identity.env` goes away. Edit `identity.env`, never the rendered files.
 - `git config --global` fails on the read-only Home Manager file: that is
   intended. `GIT_CONFIG_GLOBAL` set, or a `~/.gitconfig` with `user.`, `includeIf.`
-  or `url.` keys (git reads it last), would mask the identities, so the check flags both.
-- On macOS nothing renders identities yet; `programs.git` is the same, and a
-  commit asks you to set an identity.
+  or `url.` keys, including keys reached through its includes (git reads it last),
+  would mask the identities, so the check flags both. Unreadable or malformed
+  Git configuration is reported separately.
 
-**Template walkthrough.** On a fresh workstation the first switch (and every new
+**Template walkthrough.** On a fresh Linux workstation the first switch (and every new
 interactive zsh, with one line) says there is no identity file yet. Then:
 
 1. Copy the template and edit it:
@@ -260,10 +266,14 @@ from a read-only directory, `GIT_CONFIG_GLOBAL`, bad values, and stale outputs.
 
 ### SSH (workstation profile)
 
-`programs.ssh` writes `~/.ssh/config`: the `*` defaults this repo has always kept
-and an `Include ~/.ssh/config.d/identities`, which `activation/identity.sh`
-renders from `identity.env`. A systemd user service runs `ssh-agent` so
-`SSH_AUTH_SOCK` is set on every login.
+On macOS, `programs.ssh` keeps the existing `github.com-personal`,
+`github.com-work`, and `bitbucket.org-work` aliases and their hard-coded key paths.
+There is no identities Include, renderer, or missing-identity notice there.
+
+On the Linux workstation, `programs.ssh` writes `~/.ssh/config`: the `*` defaults
+this repo has always kept and an `Include ~/.ssh/config.d/identities`, which
+`activation/identity.sh` renders from `identity.env`. A systemd user service runs
+`ssh-agent` so `SSH_AUTH_SOCK` is set on every login.
 
 Git picks its SSH key by remote URL (see [Git identity](#git-identity)), so you
 only need an SSH host alias for old remotes such as `git@github.com-work:org/repo`.
@@ -393,8 +403,8 @@ If you clone it, review these before you run `bootstrap.sh`:
 - **Container users** (Linux): if a devcontainer's non-root user differs from your workstation username, add it to the `containerUsers` list in `flake.nix` so a `…@container-…` config exists for it.
 - **Git and SSH identity** (Linux/WSL2): nothing personal is in this repo. Copy `identity.env.example` to `~/.config/dotfiles/identity.env` and fill in your own names, emails, orgs, and key paths - see [Git identity](#git-identity). Create the private keys yourself; Nix doesn't manage secrets.
 
-**Git identity:** this config deliberately does not hard-code your git name or email.
-A repo whose remote owner matches no identity in `identity.env` makes git refuse the commit and say who it doesn't know, rather than guess one.
+**Git identity (Linux):** this config deliberately does not hard-code your git name or email.
+A repo whose remote owner matches no identity in `identity.env` makes git refuse the commit and say who it doesn't know, rather than guess one. macOS Git configuration is unchanged.
 
 **Homebrew cleanup warning:** `configuration.nix` sets `homebrew.onActivation.cleanup = "zap"`.
 That means every time you switch, Homebrew removes any package or cask on your machine that isn't listed in the `brews` and `casks` arrays in `configuration.nix`.

@@ -24,7 +24,7 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-for tool in nix ssh git; do
+for tool in nix ssh git zsh; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"
 done
 dotfiles_test_tmproot ssh-config
@@ -132,3 +132,42 @@ done
 ct_files=$(home_files "$CT")
 [ ! -e "$ct_files/.ssh/config" ] || fail "$CT: no ~/.ssh/config is generated"
 pass "$CT: no ~/.ssh/config is generated"
+
+DARWIN="$ROOT#darwinConfigurations.mac.config.home-manager.users.dev"
+unchanged=$(nix eval --json "$DARWIN" --apply 'c:
+  !c.programs.git.enable
+  && !(builtins.hasAttr "useConfigOnly" (c.programs.git.settings.user or {}))
+  && c.programs.git.includes == []
+  && !(builtins.hasAttr ".config/git/config" c.home.file)
+  && c.programs.ssh.includes == []
+  && !(builtins.hasAttr "identity" c.home.activation)
+') || fail "macOS identity scope evaluates"
+[ "$unchanged" = true ] || fail "macOS has no Linux identity configuration"
+nix eval --raw "$DARWIN.home.file.\".ssh/config\".text" >"$H/mac_ssh_config" || fail "macOS SSH configuration evaluates"
+for alias in github.com-personal github.com-work bitbucket.org-work; do
+  case "$alias" in
+    github.com-personal) host=github.com; key=id_ed25519_gh_personal ;;
+    github.com-work) host=github.com; key=id_ed25519_gh_work ;;
+    bitbucket.org-work) host=bitbucket.org; key=id_ed25519_bb_work ;;
+  esac
+  printf 'Host %s\n  HostName %s\n  User git\n  IdentityFile ~/.ssh/%s\n  IdentitiesOnly yes\n' "$alias" "$host" "$key" >"$H/mac_reference"
+  reference=$(ssh -G -F "$H/mac_reference" "$alias" 2>/dev/null) || fail "$alias reference resolves"
+  resolved=$(ssh -G -F "$H/mac_ssh_config" "$alias" 2>/dev/null) || fail "$alias macOS configuration resolves"
+  for field in hostname user identityfile identitiesonly; do
+    [ "$(ssh_value "$field")" = "$(ssh_value "$field" "$reference")" ] || fail "macOS $alias preserves $field"
+  done
+done
+mkdir -p "$H/mac_home" "$H/mac_bin"
+nix eval --raw "$DARWIN.programs.zsh.initContent" >"$H/mac_home/init.zsh" || fail "macOS zsh initialization evaluates"
+cat >"$H/mac_bin/ssh-add" <<'SHIM'
+#!/bin/sh
+printf '%s\n' "$@" >>"$SSH_ADD_LOG"
+exit 1
+SHIM
+chmod +x "$H/mac_bin/ssh-add"
+: >"$H/mac_ssh_add.log"
+env -i HOME="$H/mac_home" ZDOTDIR="$H/mac_home" PATH="$H/mac_bin:$PATH" TERM=xterm SSH_ADD_LOG="$H/mac_ssh_add.log" \
+  zsh -f -i -c 'source "$HOME/init.zsh"' </dev/null >"$H/mac_shell.out" 2>&1 || fail "macOS interactive initialization runs"
+assert_not_contains "$(cat "$H/mac_shell.out")" 'identity.env' "macOS prints no missing-identity notice"
+[ ! -s "$H/mac_ssh_add.log" ] || fail "macOS keeps main's agent behavior without Linux autoload"
+pass "macOS retains legacy SSH aliases and unmanaged Git behavior"

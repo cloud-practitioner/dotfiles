@@ -370,7 +370,105 @@ runo "$Q" workstation check
 [ "$(cat "$OUT")" = 'identity: ok' ] || fail "successful check reports ok"
 pass "Git and copied shell commands preserve accepted values"
 
-echo "== 8. stale outputs removed"
+echo "== 8. public halves with and without a final newline"
+PC=$TMP_ROOT/public-container
+mkdir -p "$PC/.config"
+ln -s "$Q/.config/dotfiles" "$PC/.config/dotfiles"
+pub_content=$(cat "$Q/.ssh/quoted.pub")
+pub_fp=$(ssh-keygen -lf "$Q/.ssh/quoted.pub" | awk '{print $2}')
+printf '%s' "$pub_content" >"$Q/.ssh/quoted.pub"
+[ "$(ssh-keygen -lf "$Q/.ssh/quoted.pub" | awk '{print $2}')" = "$pub_fp" ] || fail "newline-free public half is accepted by OpenSSH"
+runo "$Q" workstation render
+[ "$RC" = 0 ] || fail "newline-free export does not fail activation"
+[ -f "$Q/.config/dotfiles/pub/quoted.pub" ] || fail "newline-free public half is exported"
+[ "$(ssh-keygen -lf "$Q/.config/dotfiles/pub/quoted.pub" | awk '{print $2}')" = "$pub_fp" ] || fail "export preserves the public key"
+runo "$PC" container render
+[ "$RC" = 0 ] || fail "container renders newline-free key's export"
+runo "$PC" container check
+[ "$RC" = 0 ] || fail "container selects the loaded identity from the export"
+gitcfg "$PC"
+expect_route "$PC" git@github.com:quoted-owner/x.git "alice#tag\$tag'o@example.invalid" "$PC/.config/dotfiles/pub/quoted.pub"
+for kind in empty invalid unreadable; do
+  printf '%s\n' "$pub_content" >"$Q/.ssh/quoted.pub"
+  case "$kind" in
+    empty) : >"$Q/.ssh/quoted.pub" ;;
+    invalid) printf 'PRIVATE not-a-public-key' >"$Q/.ssh/quoted.pub" ;;
+    unreadable)
+      chmod 000 "$Q/.ssh/quoted.pub"
+      [ ! -r "$Q/.ssh/quoted.pub" ] || continue ;;
+  esac
+  runo "$Q" workstation render
+  [ "$RC" = 0 ] || fail "$kind public half does not fail activation"
+  [ ! -e "$Q/.config/dotfiles/pub/quoted.pub" ] || fail "$kind public half is not exported"
+  runo "$PC" container check
+  [ "$RC" = 1 ] || fail "container rejects a missing export for $kind public half"
+  assert_contains "$(cat "$OUT")" 'workstation exported no public key' "container diagnoses $kind public half"
+  chmod 644 "$Q/.ssh/quoted.pub"
+done
+chmod 644 "$Q/.ssh/quoted.pub"
+printf '%s\n' "$pub_content" >"$Q/.ssh/quoted.pub"
+runo "$Q" workstation render
+pass "public key export accepts EOF and rejects unusable files"
+
+echo "== 9. included Git overrides and inspection errors"
+expect_config_problem() {
+  local h=$1 profile=$2 message=$3 mode
+  for mode in check render; do
+    runo "$h" "$profile" "$mode"
+    if [ "$mode" = check ]; then
+      [ "$RC" = 1 ] || fail "$profile check rejects $message, got $RC: $(cat "$OUT")"
+    else
+      [ "$RC" = 0 ] || fail "$profile activation remains non-failing"
+    fi
+    assert_contains "$(cat "$OUT")" "$message" "$profile $mode reports the global config problem"
+    assert_not_contains "$(cat "$OUT")" 'identity: ok' "config problems are never reported as ok"
+  done
+}
+for profile in workstation container; do
+  if [ "$profile" = workstation ]; then h=$Q; else h=$PC; fi
+  git config --file "$h/.gitconfig" include.path legacy-parent.gitconfig
+  git config --file "$h/legacy-parent.gitconfig" include.path legacy-leaf.gitconfig
+  for field in user.email 'includeIf.gitdir:~/legacy/.path' url.git@github.com:.pushInsteadOf; do
+    rm -f "$h/legacy-leaf.gitconfig"
+    case "$field" in
+      user.email)
+        value=legacy@example.invalid
+        git config --file "$h/legacy-leaf.gitconfig" user.name 'Legacy User' ;;
+      includeIf.*) value=unused.gitconfig ;;
+      url.*) value=https://github.com/ ;;
+    esac
+    git config --file "$h/legacy-leaf.gitconfig" "$field" "$value"
+    if [ "$field" = user.email ]; then
+      [ "$(gitrun "$h" -C "$h" config user.email)" = legacy@example.invalid ] || fail "Git consumes the nested legacy identity"
+    fi
+    expect_config_problem "$h" "$profile" '~/.gitconfig sets user/includeIf/url keys'
+  done
+  rm -f "$h/legacy-leaf.gitconfig"
+  git config --file "$h/legacy-leaf.gitconfig" core.editor nvim
+  runo "$h" "$profile" check
+  [ "$RC" = 0 ] || fail "$profile accepts harmless nested includes"
+  [ "$(cat "$OUT")" = 'identity: ok' ] || fail "$profile reports a harmless config as ok"
+  for target in "$h/legacy-leaf.gitconfig" "$h/.gitconfig"; do
+    cp "$target" "$target.saved"
+    printf '[malformed\n' >"$target"
+    expect_config_problem "$h" "$profile" 'cannot inspect ~/.gitconfig or its includes'
+    assert_contains "$(cat "$OUT")" 'git config --includes --file ~/.gitconfig --list' "inspection failure prints the diagnostic command"
+    mv "$target.saved" "$target"
+    if [ "$target" = "$h/.gitconfig" ]; then
+      chmod 000 "$target"
+      if [ ! -r "$target" ]; then
+        expect_config_problem "$h" "$profile" 'cannot inspect ~/.gitconfig or its includes'
+      fi
+      chmod 600 "$target"
+    fi
+  done
+  rm -f "$h/.gitconfig" "$h/legacy-parent.gitconfig" "$h/legacy-leaf.gitconfig"
+  runo "$h" "$profile" check
+  [ "$RC" = 0 ] || fail "$profile ordinary check still succeeds"
+done
+pass "global config checks follow includes and distinguish inspection failures"
+
+echo "== 10. stale outputs removed"
 sed -i 's/^IDENTITIES=.*/IDENTITIES="gh_personal"/' "$WS/.config/dotfiles/identity.env"
 runo "$WS" workstation render
 if [ -e "$WS/.config/git/identity/gh_work.gitconfig" ] || [ -e "$WS/.config/git/identity/bb_work.gitconfig" ] \

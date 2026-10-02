@@ -6,11 +6,16 @@ let
   # identities) so the same shell/tools can be reused inside a devcontainer
   # that borrows the WSL2 host's forwarded agent instead.
   isWorkstation = profile == "workstation";
-  # Personal git and SSH identity values live in the workstation's
+  # Personal git and SSH identity values live in the Linux workstation's
   # ~/.config/dotfiles/identity.env, never in this public repo. Activation
   # renders them (activation/identity.sh); this is where the workstation zsh
   # reads the key paths to load into an empty agent.
   identityDir = "$HOME/.config/dotfiles";
+  sshKeys = {
+    ghWork = "~/.ssh/id_ed25519_gh_work";
+    ghPersonal = "~/.ssh/id_ed25519_gh_personal";
+    bbWork = "~/.ssh/id_ed25519_bb_work";
+  };
   # Moves these PATH entries right before ~/.nix-profile/bin, or to the front
   # without it, once each, so they win over the Nix profile's, the system's,
   # and WSL's Windows-interop (/mnt/*) copies: ~/.local/bin first (herdr from
@@ -256,7 +261,7 @@ in
     };
   };
 
-  # SSH client config on the workstation. The legacy per-host aliases and the
+  # SSH client config on the Linux workstation. The legacy per-host aliases and the
   # key paths are personal, so they come from ~/.config/dotfiles/identity.env:
   # activation/identity.sh renders ~/.ssh/config.d/identities, which is
   # included here. The private keys are not managed by Nix - create them
@@ -269,7 +274,7 @@ in
   programs.ssh = lib.mkIf isWorkstation {
     enable = true;
     enableDefaultConfig = false;
-    includes = [ "~/.ssh/config.d/identities" ];
+    includes = lib.optional pkgs.stdenv.isLinux "~/.ssh/config.d/identities";
     settings = {
       "*" = {
         AddKeysToAgent = "yes";
@@ -283,6 +288,25 @@ in
         ControlPath = "~/.ssh/master-%r@%n:%p";
         ControlPersist = "no";
       };
+    } // lib.optionalAttrs pkgs.stdenv.isDarwin {
+      "github.com-personal" = {
+        HostName = "github.com";
+        User = "git";
+        IdentityFile = sshKeys.ghPersonal;
+        IdentitiesOnly = true;
+      };
+      "github.com-work" = {
+        HostName = "github.com";
+        User = "git";
+        IdentityFile = sshKeys.ghWork;
+        IdentitiesOnly = true;
+      };
+      "bitbucket.org-work" = {
+        HostName = "bitbucket.org";
+        User = "git";
+        IdentityFile = sshKeys.bbWork;
+        IdentitiesOnly = true;
+      };
     };
   };
 
@@ -294,7 +318,7 @@ in
   # the include while the file is missing, and useConfigOnly then refuses a
   # commit instead of guessing an identity. No folder (gitdir:) rules and no
   # insteadOf: clones stay anonymous HTTPS, and only pushes go over SSH.
-  programs.git = {
+  programs.git = lib.mkIf pkgs.stdenv.isLinux {
     enable = true;
     # With stateVersion 24.11 Home Manager would otherwise add a gpg section.
     signing.format = null;

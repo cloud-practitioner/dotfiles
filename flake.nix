@@ -78,7 +78,7 @@
             home-manager.useUserPackages = true;
             # macOS is always a workstation; the module system doesn't honor the
             # `profile ? ...` default in home.nix, so pass it explicitly here.
-            home-manager.extraSpecialArgs = { inherit user dotfilesRev; profile = "workstation"; };
+            home-manager.extraSpecialArgs = { inherit user; profile = "workstation"; };
             home-manager.users.${user} = import ./home.nix;
           }
         ];

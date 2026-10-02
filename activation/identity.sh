@@ -125,8 +125,8 @@ key_ref() {
 }
 
 is_public_key() { # first token must be an OpenSSH public key type
-  local t
-  read -r t _ <"$1" 2>/dev/null || return 1
+  local t=''
+  read -r t _ <"$1" 2>/dev/null || [ -n "$t" ] || return 1
   case "$t" in ssh-ed25519 | ssh-rsa | ecdsa-sha2-* | sk-ssh-ed25519@openssh.com | sk-ecdsa-sha2-*) return 0 ;; esac
   return 1
 }
@@ -279,8 +279,14 @@ check() {
   if [ "${GIT_CONFIG_GLOBAL+set}" = set ]; then
     problem "GIT_CONFIG_GLOBAL=$GIT_CONFIG_GLOBAL hides ~/.config/git/config (and these identities); unset it"
   fi
-  if [ -f "$HOME/.gitconfig" ] && git config --file "$HOME/.gitconfig" --get-regexp '^(user\.|includeif\.|url\.)' >/dev/null 2>&1; then
-    problem "~/.gitconfig sets user/includeIf/url keys that override these identities (git reads it last). Move them into $(tilde "$ID_FILE") and delete ~/.gitconfig."
+  if [ -f "$HOME/.gitconfig" ]; then
+    git config --includes --file "$HOME/.gitconfig" --get-regexp '^(user\.|includeif\.|url\.)' >/dev/null 2>&1
+    rc=$?
+    if [ "$rc" = 0 ]; then
+      problem "~/.gitconfig sets user/includeIf/url keys that override these identities (git reads it last). Move them into $(tilde "$ID_FILE") and delete ~/.gitconfig."
+    elif [ "$rc" != 1 ] || [ ! -r "$HOME/.gitconfig" ]; then
+      problem "cannot inspect ~/.gitconfig or its includes. Run 'git config --includes --file ~/.gitconfig --list', then fix its parse/read errors."
+    fi
   fi
 }
 
