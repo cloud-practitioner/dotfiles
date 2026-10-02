@@ -35,8 +35,7 @@ fi
 echo "==> Step 2: symlink this repo to ~/.dotfiles"
 # home.nix resolves its mkOutOfStoreSymlink paths through ~/.dotfiles, so this
 # has to exist before the first switch or the build will fail to find them.
-# Cloning straight into ~/.dotfiles needs no link; a different real directory
-# there is refused rather than clobbered.
+# See tools/link-dotfiles.sh for the check-then-act, no-clobber policy.
 # shellcheck source=tools/link-dotfiles.sh
 . "$DIR/tools/link-dotfiles.sh"
 link_dotfiles "$DIR" || exit 1

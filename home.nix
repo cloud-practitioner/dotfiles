@@ -112,8 +112,8 @@ in
   # tools), so tools/node-tools.sh finds the image's Node.js and pnpm.
   home.emptyActivationPath = lib.mkIf (pkgs.stdenv.isLinux && !isWorkstation) false;
 
-  # On macOS the nix-darwin module drives home-manager, but standalone Linux
-  # needs its own `home-manager` CLI (used by rebuild.sh).
+  # Keep the standalone CLI available on Linux for manual use; rebuild.sh
+  # deliberately does not rely on this installed copy.
   programs.home-manager.enable = pkgs.stdenv.isLinux;
 
   programs.zsh = {

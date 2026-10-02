@@ -59,10 +59,11 @@ Change the host label or CPU architecture if needed, and read the Homebrew clean
 ./bootstrap.sh
 ```
 
-`bootstrap.sh` does four things, in order:
+`bootstrap.sh` runs a WSL-only systemd preflight (see [Linux](#linux)), then four setup steps in order:
 
 1. Installs Determinate Nix, if it isn't already installed.
-2. Symlinks this repo to `~/.dotfiles`.
+2. Makes `~/.dotfiles` reach this repo: leaves it alone if it already resolves here (including a clone directly into `~/.dotfiles`), otherwise creates or re-points a symlink.
+   A different real directory or file is refused rather than overwritten.
    This has to happen before the first build, because `home.nix` points at config files through `~/.dotfiles`.
 3. Checks the `user` configured in `flake.nix` against your actual username, and offers to fix it for you if they differ.
 4. Runs the first switch.
@@ -106,6 +107,8 @@ The same two scripts work - they detect the OS with `uname` and branch automatic
 ./rebuild.sh     # re-applies after changes; every switch also installs missing agent CLIs
 ```
 
+`bootstrap.sh`, Linux `rebuild.sh`, and the container-only `hm-update` helper all run the Home Manager CLI at the revision pinned in `flake.lock`.
+
 ### From-scratch bootstrap (WSL2 workstation)
 
 On a fresh WSL2 distro with systemd enabled (see the WSL2 + systemd note below), clone straight into `~/.dotfiles` and bootstrap:
@@ -114,9 +117,6 @@ On a fresh WSL2 distro with systemd enabled (see the WSL2 + systemd note below),
 git clone https://github.com/cloud-practitioner/dotfiles.git ~/.dotfiles && ~/.dotfiles/bootstrap.sh
 ```
 
-`bootstrap.sh` checks first that WSL is running systemd and stops with the `/etc/wsl.conf` fix if not.
-Cloning into `~/.dotfiles` needs no symlink; if the repo lives elsewhere, the script links `~/.dotfiles` to it, and refuses if `~/.dotfiles` is a different real directory.
-The first switch runs the Home Manager CLI at the revision pinned in `flake.lock`.
 Every step checks before acting, so re-running `bootstrap.sh` does nothing beyond the Home Manager switch.
 
 On the WSL2 workstation, pick up changes pushed to this repo by pulling and re-applying:
@@ -313,9 +313,9 @@ config; on a plain WSL2 host it uses the workstation config.
 This repo is mine.
 If you clone it, review these before you run `bootstrap.sh`:
 
-- **Username**: run `./bootstrap.sh` (it detects your macOS username and offers to set it) OR change the single `user = "kunchen"` line in `flake.nix`.
+- **Username**: run `./bootstrap.sh` (it detects your workstation username and offers to set it) OR change the single `user` setting in `flake.nix`.
   Everything else (`configuration.nix`, `home.nix`, home directory paths) is threaded from that one variable.
-- **Host label** `"mac"`, in three places: `flake.nix` (the `darwinConfigurations."mac"` name), `rebuild.sh:5` (the `#mac` at the end of the flake reference), and `bootstrap.sh`'s first-switch command (also `#mac`).
+- **Host label** `"mac"`, in three places: `flake.nix` (the `darwinConfigurations."mac"` name), `rebuild.sh` (the `#mac` at the end of the flake reference), and `bootstrap.sh`'s first-switch command (also `#mac`).
   All three have to match.
 - **CPU architecture**, `hostPlatform` in `configuration.nix` (see Prerequisites above).
 - **Container users** (Linux): if a devcontainer's non-root user differs from your workstation username, add it to the `containerUsers` list in `flake.nix` so a `…@container-…` config exists for it.
