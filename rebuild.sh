@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-ln -sfn "$DIR" ~/.dotfiles
+# shellcheck source=tools/link-dotfiles.sh
+. "$DIR/tools/link-dotfiles.sh"
+link_dotfiles "$DIR" || exit 1
 if [ "$(uname -s)" = "Darwin" ]; then
   exec sudo darwin-rebuild switch --flake ~/.dotfiles#mac
 fi
@@ -22,8 +24,8 @@ fi
 TARGET=~/.dotfiles#"$(whoami)@${PROFILE_PREFIX}${HM_SYSTEM}"
 # The home-manager CLI lands in ~/.nix-profile/bin after the first switch, but
 # that isn't on PATH in a shell started before it existed. Fall back to running
-# it straight from the flake so rebuild.sh works in any shell.
+# it straight from the flake (the revision locked in flake.lock) so rebuild.sh works in any shell.
 if command -v home-manager >/dev/null 2>&1; then
   exec home-manager switch --flake "$TARGET"
 fi
-exec nix run github:nix-community/home-manager/release-26.05 -- switch --flake "$TARGET"
+exec nix run --inputs-from ~/.dotfiles home-manager -- switch --flake "$TARGET"

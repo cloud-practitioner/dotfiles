@@ -106,6 +106,19 @@ The same two scripts work - they detect the OS with `uname` and branch automatic
 ./rebuild.sh     # re-applies after changes; every switch also installs missing agent CLIs
 ```
 
+### From-scratch bootstrap (WSL2 workstation)
+
+On a fresh WSL2 distro with systemd enabled (see the WSL2 + systemd note below), clone straight into `~/.dotfiles` and bootstrap:
+
+```sh
+git clone https://github.com/cloud-practitioner/dotfiles.git ~/.dotfiles && ~/.dotfiles/bootstrap.sh
+```
+
+`bootstrap.sh` checks first that WSL is running systemd and stops with the `/etc/wsl.conf` fix if not.
+Cloning into `~/.dotfiles` needs no symlink; if the repo lives elsewhere, the script links `~/.dotfiles` to it, and refuses if `~/.dotfiles` is a different real directory.
+The first switch runs the Home Manager CLI at the revision pinned in `flake.lock`.
+Every step checks before acting, so re-running `bootstrap.sh` does nothing beyond the Home Manager switch.
+
 On the WSL2 workstation, pick up changes pushed to this repo by pulling and re-applying:
 
 ```sh
@@ -129,7 +142,7 @@ Notes:
 - **Login shell**: home-manager can't change your login shell. To use zsh, run once `chsh -s "$(command -v zsh)"`, then open a new terminal. `bootstrap.sh` prints this reminder.
 - **herdr and Claude Code** come from Homebrew on macOS (`configuration.nix`); Pi and the Copilot CLI are not installed there, and none of the Node.js setup below applies.
 - Applying is per-user, so there's no `sudo` on Linux.
-- **WSL2 + systemd**: the `ssh-agent` service is a systemd *user* service, so WSL2 needs systemd enabled. Add `[boot]` / `systemd=true` to `/etc/wsl.conf`, then `wsl --shutdown` and reopen; otherwise the agent never starts and `SSH_AUTH_SOCK` stays empty.
+- **WSL2 + systemd**: the `ssh-agent` service is a systemd *user* service, so WSL2 needs systemd enabled. Add `[boot]` / `systemd=true` to `/etc/wsl.conf`, then `wsl --shutdown` and reopen; otherwise the agent never starts and `SSH_AUTH_SOCK` stays empty. The Determinate Nix daemon needs it too, so `bootstrap.sh` refuses to run on WSL without it.
 
 ### Upstream CLI tools
 

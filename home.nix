@@ -187,7 +187,7 @@ in
           *) echo "unsupported $(uname -m)" >&2; return 1 ;;
         esac
         git -C "$HOME/.dotfiles" pull --ff-only || return 1
-        nix run github:nix-community/home-manager/release-26.05 -- switch -b backup --flake "$HOME/.dotfiles#$(id -un)@container-$sys"
+        nix run --inputs-from "$HOME/.dotfiles" home-manager -- switch -b backup --flake "$HOME/.dotfiles#$(id -un)@container-$sys"
       }
 
       # Cheap, non-blocking welcome note (once per terminal); no network calls.

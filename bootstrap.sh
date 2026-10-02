@@ -5,6 +5,23 @@ set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
+echo "==> Step 0: preflight"
+# The Determinate Nix daemon and Home Manager's ssh-agent user unit both need
+# systemd, which WSL2 only runs when /etc/wsl.conf enables it.
+if grep -qi microsoft /proc/version 2>/dev/null; then
+  if [ "$(ps -p 1 -o comm= 2>/dev/null | tr -d ' ')" != systemd ]; then
+    echo "    WSL is running without systemd (PID 1 is not systemd)."
+    echo "    Add these lines to /etc/wsl.conf:"
+    echo "        [boot]"
+    echo "        systemd=true"
+    echo "    then run \`wsl --shutdown\` from Windows, reopen the distro, and re-run ./bootstrap.sh."
+    exit 1
+  fi
+  echo "    WSL with systemd, ok"
+else
+  echo "    not WSL, nothing to check"
+fi
+
 echo "==> Step 1: Determinate Nix"
 if command -v nix >/dev/null 2>&1; then
   echo "    nix already installed, skipping"
@@ -18,7 +35,11 @@ fi
 echo "==> Step 2: symlink this repo to ~/.dotfiles"
 # home.nix resolves its mkOutOfStoreSymlink paths through ~/.dotfiles, so this
 # has to exist before the first switch or the build will fail to find them.
-ln -sfn "$DIR" ~/.dotfiles
+# Cloning straight into ~/.dotfiles needs no link; a different real directory
+# there is refused rather than clobbered.
+# shellcheck source=tools/link-dotfiles.sh
+. "$DIR/tools/link-dotfiles.sh"
+link_dotfiles "$DIR" || exit 1
 
 echo "==> Step 3: personalize the configured username"
 # Do this before any sudo call: sudo resets $USER to root, so whoami has to
@@ -76,7 +97,9 @@ else
     aarch64 | arm64) HM_SYSTEM="aarch64-linux" ;;
     *) echo "    Unsupported CPU: $(uname -m)"; exit 1 ;;
   esac
-  "$NIX_BIN" run github:nix-community/home-manager/release-26.05 -- \
+  # --inputs-from resolves `home-manager` to the revision pinned in flake.lock,
+  # so the CLI matches the Home Manager the config is built with.
+  "$NIX_BIN" run --inputs-from ~/.dotfiles home-manager -- \
     switch -b backup --flake ~/.dotfiles#"${REAL_USER}@${HM_SYSTEM}"
   # home-manager can't change your login shell; do it once so zsh is the default.
   case "${SHELL:-}" in
