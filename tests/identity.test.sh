@@ -26,11 +26,12 @@ for tool in git ssh ssh-agent ssh-add ssh-keygen; do
 done
 dotfiles_test_tmproot identity
 S=$ROOT/activation/identity.sh
-WS=$TMP_ROOT/ws CT=$TMP_ROOT/ct BIN=$TMP_ROOT/bin
-mkdir -p "$WS" "$CT" "$BIN"
+WS="$TMP_ROOT/ws space's\$home" CT=$TMP_ROOT/ct BIN=$TMP_ROOT/bin
+mkdir -p "$WS/.dotfiles" "$CT" "$BIN"
+ln -s "$ROOT/identity.env.example" "$WS/.dotfiles/identity.env.example"
 cat >"$BIN/ssh" <<'SHIM'
 #!/bin/sh
-echo "ssh $*" >>"$SSH_LOG"
+printf '%s\n' "$@" >"$SSH_LOG"
 exit 128
 SHIM
 chmod +x "$BIN/ssh"
@@ -50,7 +51,7 @@ SOCK=
 RC=0
 run() {
   local h=$1 p=$2 m=$3; shift 3
-  env -i HOME="$h" PATH="$PATH" SSH_AUTH_SOCK="$SOCK" DOTFILES_TEMPLATE="$ROOT/identity.env.example" "$@" bash "$S" "$m" "$p" 2>&1
+  env -i HOME="$h" PATH="$PATH" SSH_AUTH_SOCK="$SOCK" "$@" "$S" "$m" "$p" 2>&1
   RC=$?
 }
 OUT=$TMP_ROOT/out
@@ -60,7 +61,7 @@ echo "== 1. fresh workstation, no identity file"
 runo "$WS" workstation render DOTFILES_REV=abc123
 out=$(cat "$OUT")
 echo "$out"
-assert_contains "$out" "install -D -m 600 $ROOT/identity.env.example ~/.config/dotfiles/identity.env" "guidance names the template copy"
+assert_contains "$out" "install -D -m 600 ~/.dotfiles/identity.env.example ~/.config/dotfiles/identity.env" "guidance names the template copy"
 assert_not_contains "$out" "ssh-keygen" "no key guidance before there is an identity file"
 [ "$RC" = 0 ] || fail "render never fails the switch"
 [ ! -e "$WS/.config/git/identities.gitconfig" ] && [ ! -e "$WS/.ssh" ] || fail "nothing rendered without an identity file"
@@ -100,11 +101,12 @@ done
 eval "$(ssh-agent -a "$TMP_ROOT/agent.sock")" >/dev/null
 AGENT_PID=$SSH_AGENT_PID SOCK=$TMP_ROOT/agent.sock
 SSH_AUTH_SOCK=$SOCK ssh-add -q "$WS/.ssh/id_ed25519_gh_personal" 2>/dev/null
-runo "$WS" workstation render DOTFILES_REV=abc123
+runo "$WS" workstation render DOTFILES_REV=abc123 XDG_CONFIG_HOME="$TMP_ROOT/alternate"
 out=$(cat "$OUT")
 echo "$out"
 [ "$RC" = 0 ] || fail "render exits 0 with problems"
-assert_contains "$out" "ssh-keygen -t ed25519 -C \"gh-work@example.invalid\" -f ~/.ssh/id_ed25519_gh_work" "missing key -> ssh-keygen guidance"
+[ ! -e "$TMP_ROOT/alternate" ] || fail "identity paths stay under ~/.config"
+assert_contains "$out" "ssh-keygen -t ed25519 -C 'gh-work@example.invalid' -f ~/.ssh/id_ed25519_gh_work" "missing key -> ssh-keygen guidance"
 assert_contains "$out" "https://github.com/settings/ssh/new" "missing key -> where to register the public key"
 assert_contains "$out" "bb_work: key not loaded in the agent: ssh-add ~/.ssh/id_ed25519_bb_work" "unloaded key -> ssh-add guidance"
 assert_not_contains "$out" "gh_personal:" "loaded key raises nothing"
@@ -123,7 +125,9 @@ done
 [ "$(cat "$D/applied-rev")" = abc123 ] || fail "applied revision recorded"
 [ "$(cat "$D/ssh-keys")" = "$(printf '%s\n' "$WS/.ssh/id_ed25519_gh_personal" "$WS/.ssh/id_ed25519_gh_work" "$WS/.ssh/id_ed25519_bb_work")" ] \
   || fail "key list for the zsh agent autoload"
-grep -q "IdentityFile $WS/.ssh/id_ed25519_gh_personal" "$WS/.ssh/config.d/identities" || fail "alias uses the private key path"
+resolved=$(ssh -G -F "$WS/.ssh/config.d/identities" github.com-personal 2>/dev/null) || fail "workstation alias resolves"
+[ "$(awk '$1 == "hostname" {print $2}' <<<"$resolved")" = github.com ] || fail "workstation alias uses the real host"
+[ "$(awk '$1 == "identityfile" {sub(/^[^ ]+ /, ""); print}' <<<"$resolved")" = "$WS/.ssh/id_ed25519_gh_personal" ] || fail "alias uses only the private key path"
 [ "$(stat -c %a "$WS/.ssh/config.d/identities")" = 600 ] || fail "ssh include is mode 600"
 # Rewritten only when the content changes.
 stamp() { stat -c '%i %Y' "$WS/.config/git/identities.gitconfig" "$WS/.config/git/identity/"*.gitconfig "$WS/.ssh/config.d/identities" "$D/ssh-keys" "$D/applied-rev" "$D/pub/"*; }
@@ -150,7 +154,7 @@ route() {
   EMAIL=$(gitrun "$h" -C "$d" config user.email || echo NONE) SSH=
   case "$url" in
     https://*) ;;
-    *) : >"$SSH_LOG"; gitrun "$h" clone -q "$url" "$d.clone" >/dev/null 2>&1; SSH=$(head -n1 "$SSH_LOG") ;;
+    *) : >"$SSH_LOG"; gitrun "$h" clone -q "$url" "$d.clone" >/dev/null 2>&1; SSH=$(tr '\n' ' ' <"$SSH_LOG") ;;
   esac
   printf '%-52s email=%-26s %s\n' "$url" "$EMAIL" "${SSH%% -o SendEnv*}"
   rm -rf "$d" "$d.clone"
@@ -158,7 +162,19 @@ route() {
 expect_route() { # home url email key-path-or-empty
   route "$1" "$2"
   [ "$EMAIL" = "$3" ] || fail "$2 -> email $3 (got $EMAIL)"
-  [ -z "$4" ] || assert_contains "$SSH" "-i $4 -o IdentitiesOnly=yes" "$2 -> ssh uses $4"
+  if [ -n "$4" ]; then
+    [ "$(awk '$0 == "-i" {getline; print}' "$SSH_LOG")" = "$4" ] || fail "$2 -> ssh uses exactly one key argument"
+    [ "$(awk '$0 == "-o" {getline; if ($0 == "IdentitiesOnly=yes") print}' "$SSH_LOG")" = IdentitiesOnly=yes ] || fail "$2 -> ssh offers only the selected identity"
+  fi
+}
+expect_alias() {
+  local h=$1 label=$2 alias=$3 host=$4 key=$5 command resolved
+  command=$(git config --file "$h/.config/git/identity/$label.gitconfig" core.sshCommand) || fail "SSH command is readable"
+  resolved=$(sh -c "$command -G \"\$1\"" -- "$alias" 2>/dev/null) || fail "$alias: configured SSH command resolves"
+  [ "$(awk '$1 == "hostname" {print $2}' <<<"$resolved")" = "$host" ] || fail "$alias: resolves to $host"
+  [ "$(awk '$1 == "user" {print $2}' <<<"$resolved")" = git ] || fail "$alias: connects as git"
+  [ "$(awk '$1 == "identitiesonly" {print $2}' <<<"$resolved")" = yes ] || fail "$alias: offers only its identity"
+  [ "$(awk '$1 == "identityfile" {sub(/^[^ ]+ /, ""); print}' <<<"$resolved" | sort -u)" = "$key" ] || fail "$alias: uses only $key, got: $resolved"
 }
 echo "== 3. workstation routing (git $(git --version | awk '{print $3}'))"
 gitcfg "$WS"
@@ -184,44 +200,79 @@ expect_route "$WS" git@gitlab.com:work-org/y.git NONE ""
 pass "routing: personal, work org, Bitbucket workspace, legacy alias; unmatched owner refuses commit"
 
 echo "== 4. container: identity dir mounted read-only, no ~/.ssh mount"
+mkdir -p "$CT/.config"
+ln -s "$WS/.config/dotfiles" "$CT/.config/dotfiles"
 chmod -R a-w "$WS/.config/dotfiles"
-runo "$CT" container render DOTFILES_IDENTITY_DIR="$WS/.config/dotfiles"
+mounted_before=$(find "$D" -printf '%P %m %s %T@\n' | sort)
+runo "$CT" container render
 out=$(cat "$OUT")
 echo "$out"
 [ "$RC" = 0 ] || fail "container render exits 0"
 assert_contains "$out" "gh_work: the workstation exported no public key" "container names the missing key"
 assert_not_contains "$out" "cannot write" "a read-only identity directory is never written"
 assert_not_contains "$out" "gh_personal:" "container: the forwarded agent holds gh_personal"
-grep -q "sshCommand = ssh -i \"$WS/.config/dotfiles/pub/gh_personal.pub\" -o IdentitiesOnly=yes" "$CT/.config/git/identity/gh_personal.gitconfig" \
-  || fail "container selects the agent key by its public half"
-grep -q "IdentityFile $WS/.config/dotfiles/pub/bb_work.pub" "$CT/.ssh/config.d/identities" || fail "container alias uses the public half"
-[ ! -e "$CT/.config/dotfiles" ] || fail "container render writes nothing under its own identity directory"
+[ "$mounted_before" = "$(find "$D" -printf '%P %m %s %T@\n' | sort)" ] || fail "container leaves the mounted identity directory unchanged"
 gitcfg "$CT"
-expect_route "$CT" git@github.com:cloud-practitioner/x.git personal@example.invalid "$WS/.config/dotfiles/pub/gh_personal.pub"
-expect_route "$CT" git@bitbucket.org:iqx-test/z.git bb-work@example.invalid "$WS/.config/dotfiles/pub/bb_work.pub"
+expect_route "$CT" git@github.com:cloud-practitioner/x.git personal@example.invalid "$CT/.config/dotfiles/pub/gh_personal.pub"
+expect_route "$CT" git@bitbucket.org:iqx-test/z.git bb-work@example.invalid "$CT/.config/dotfiles/pub/bb_work.pub"
+for url in git@github.com-personal:cloud-practitioner/x.git ssh://git@github.com-personal/cloud-practitioner/x.git; do
+  expect_route "$CT" "$url" personal@example.invalid "$CT/.config/dotfiles/pub/gh_personal.pub"
+done
+for url in git@bitbucket.org-work:iqx-test/z.git ssh://git@bitbucket.org-work/iqx-test/z.git; do
+  expect_route "$CT" "$url" bb-work@example.invalid "$CT/.config/dotfiles/pub/bb_work.pub"
+done
+expect_alias "$CT" gh_personal github.com-personal github.com "$CT/.config/dotfiles/pub/gh_personal.pub"
+expect_alias "$CT" bb_work bitbucket.org-work bitbucket.org "$CT/.config/dotfiles/pub/bb_work.pub"
 chmod -R u+w "$WS/.config/dotfiles"
-runo "$CT" container check DOTFILES_IDENTITY_DIR="$TMP_ROOT/not-mounted"
+rm "$CT/.config/dotfiles"
+runo "$CT" container check
 out=$(cat "$OUT")
 assert_contains "$out" "identity directory is not mounted here" "container says plainly the identity file is not mounted"
 assert_contains "$out" "install -D -m 600 ~/.dotfiles/identity.env.example" "container points at the workstation setup"
+ln -s "$WS/.config/dotfiles" "$CT/.config/dotfiles"
 SOCK_KEEP=$SOCK SOCK=$TMP_ROOT/dead.sock
-runo "$CT" container check DOTFILES_IDENTITY_DIR="$WS/.config/dotfiles"
+runo "$CT" container check
 SOCK=$SOCK_KEEP
 out=$(cat "$OUT")
 assert_contains "$out" "no ssh-agent at SSH_AUTH_SOCK=$TMP_ROOT/dead.sock" "container names a missing forwarded agent"
 pass "container render: public halves only, from the read-only identity dir"
 
 echo "== 5. GIT_CONFIG_GLOBAL and ~/.gitconfig mask the identities"
-runo "$CT" container check DOTFILES_IDENTITY_DIR="$WS/.config/dotfiles" GIT_CONFIG_GLOBAL=/home/node/.gitconfig-container
+runo "$CT" container check GIT_CONFIG_GLOBAL=/home/node/.gitconfig-container
 out=$(cat "$OUT")
 assert_contains "$out" "GIT_CONFIG_GLOBAL=/home/node/.gitconfig-container" "warns about GIT_CONFIG_GLOBAL"
 [ "$RC" = 1 ] || fail "check exits 1 on problems"
 printf '[user]\n\temail = old@example.invalid\n' >"$WS/.gitconfig"
-runo "$WS" workstation check
+runo "$WS" workstation check GIT_CONFIG_GLOBAL=
 out=$(cat "$OUT")
-assert_contains "$out" "~/.gitconfig sets user/includeIf/url keys" "warns about an overriding ~/.gitconfig"
+[ "$RC" = 1 ] || fail "empty-but-set GIT_CONFIG_GLOBAL fails check"
+assert_contains "$out" 'GIT_CONFIG_GLOBAL= hides' "warns about empty-but-set GIT_CONFIG_GLOBAL"
+assert_contains "$out" "~/.gitconfig sets user/includeIf/url keys" "also warns about an overriding ~/.gitconfig"
 rm "$WS/.gitconfig"
-pass "check flags GIT_CONFIG_GLOBAL and ~/.gitconfig"
+chmod 666 "$D/identity.env"
+for profile in workstation container; do
+  if [ "$profile" = workstation ]; then h=$WS; else h=$CT; fi
+  runo "$h" "$profile" check
+  [ "$RC" = 1 ] || fail "$profile rejects writable identity.env"
+  assert_contains "$(cat "$OUT")" 'must not be group/world-writable: chmod 600 ~/.config/dotfiles/identity.env' "$profile prints mode repair guidance"
+done
+chmod 600 "$D/identity.env"
+STAT=$(command -v stat)
+cat >"$BIN/stat" <<SHIM
+#!/bin/sh
+if [ "\$1" = -c ] && [ "\$2" = %u ]; then
+  echo 999999
+else
+  exec "$STAT" "\$@"
+fi
+SHIM
+chmod +x "$BIN/stat"
+runo "$WS" workstation check PATH="$BIN:$PATH"
+assert_contains "$(cat "$OUT")" "must be owned by you: chown $(id -un) ~/.config/dotfiles/identity.env" "wrong ownership has chown guidance"
+runo "$CT" container check PATH="$BIN:$PATH"
+assert_not_contains "$(cat "$OUT")" 'must be owned by you' "container skips only the host UID check"
+rm "$BIN/stat"
+pass "check flags global config, mode and ownership problems"
 
 echo "== 6. strict parsing: never sourced, bad values rejected"
 BAD=$TMP_ROOT/bad
@@ -247,20 +298,88 @@ echo "$out"
 assert_contains "$out" "evil_KEY has an invalid value" "shell metacharacters in _KEY rejected"
 assert_contains "$out" "evil_NAME has an invalid value" "backslash in _NAME rejected"
 [ ! -e "$BAD/.config/git/identity/evil.gitconfig" ] || fail "an invalid identity renders nothing"
-grep -qF 'name = $(touch' "$BAD/.config/git/identity/ok.gitconfig" || fail "command substitution stays literal text"
+[ "$(git config --file "$BAD/.config/git/identity/ok.gitconfig" user.name)" = "\$(touch $TMP_ROOT/pwned)" ] || fail "command substitution stays literal text"
+for key in ../.ssh/key '~relative/key'; do
+  printf 'IDENTITIES=ok\nok_HOST=github.com\nok_OWNERS=fine\nok_KEY=%s\nok_NAME=Test\nok_EMAIL=t@example.invalid\n' "$key" >"$BAD/.config/dotfiles/identity.env"
+  runo "$BAD" workstation render
+  assert_contains "$(cat "$OUT")" 'ok_KEY must start with / or ~/' "relative key has clear validation guidance"
+  [ ! -e "$BAD/.config/git/identity/ok.gitconfig" ] || fail "relative key renders no identity"
+done
+printf "IDENTITIES='ok'\n" >"$BAD/.config/dotfiles/identity.env"
+runo "$BAD" workstation render
+assert_contains "$(cat "$OUT")" "IDENTITIES label 'ok' has an invalid value" "single quotes are not stripped"
+[ ! -e "$BAD/.config/git/identity/ok.gitconfig" ] || fail "single-quoted label renders no identity"
 printf 'IDENTITIES="a"\nthis is not a setting\n' >"$BAD/.config/dotfiles/identity.env"
 runo "$BAD" workstation check
 out=$(cat "$OUT")
 assert_contains "$out" "identity.env:2 is not a KEY=value line" "a non-KEY=value line is an error"
+chmod 000 "$BAD/.config/dotfiles/identity.env"
+if [ ! -r "$BAD/.config/dotfiles/identity.env" ]; then
+  for profile in workstation container; do
+    for mode in check render; do
+      runo "$BAD" "$profile" "$mode"
+      if [ "$mode" = check ]; then
+        [ "$RC" = 1 ] || fail "unreadable identity fails check"
+      else
+        [ "$RC" = 0 ] || fail "unreadable identity does not fail activation"
+      fi
+      assert_contains "$(cat "$OUT")" 'cannot read ~/.config/dotfiles/identity.env: chmod u+r' "read failure is counted and has guidance"
+      assert_not_contains "$(cat "$OUT")" 'identity: ok' "unreadable identity is never reported as ok"
+    done
+  done
+fi
+chmod 600 "$BAD/.config/dotfiles/identity.env"
 pass "identity file parsed strictly"
 
-echo "== 7. stale outputs removed"
+echo "== 7. accepted values survive Git and shell consumers"
+Q="$TMP_ROOT/quoted space's\$home"
+mkdir -p "$Q/.config/dotfiles"
+cat >"$Q/.config/dotfiles/identity.env" <<'ENVFILE'
+IDENTITIES=quoted
+quoted_HOST=github.com
+quoted_OWNERS=quoted-owner
+quoted_KEY=~/.ssh/quoted
+quoted_NAME="  Alice #1; O'Neil  "
+quoted_EMAIL="alice#tag$tag'o@example.invalid"
+ENVFILE
+chmod 600 "$Q/.config/dotfiles/identity.env"
+runo "$Q" workstation render
+out=$(cat "$OUT")
+[ "$(git config --file "$Q/.config/git/identity/quoted.gitconfig" user.name)" = "  Alice #1; O'Neil  " ] || fail "Git preserves name punctuation and whitespace"
+[ "$(git config --file "$Q/.config/git/identity/quoted.gitconfig" user.email)" = "alice#tag\$tag'o@example.invalid" ] || fail "Git preserves email punctuation"
+printf '[user]\n\tuseConfigOnly = true\n[include]\n\tpath = ~/.config/git/identities.gitconfig\n' >"$Q/.config/git/config"
+expect_route "$Q" git@github.com:quoted-owner/x.git "alice#tag\$tag'o@example.invalid" "$Q/.ssh/quoted"
+KEYGEN=$(command -v ssh-keygen)
+cat >"$BIN/ssh-keygen" <<'SHIM'
+#!/bin/sh
+printf '%s\n' "$@" >"$KEYGEN_LOG"
+SHIM
+chmod +x "$BIN/ssh-keygen"
+command=$(printf '%s\n' "$out" | awk '/^identity:     ssh-keygen / {sub(/^identity:     /, ""); print}')
+[ -n "$command" ] || fail "key-generation command is printed"
+env -i HOME="$Q" PATH="$BIN:$PATH" KEYGEN_LOG="$TMP_ROOT/keygen.log" sh -c "$command" || fail "printed guidance executes"
+[ "$(awk '$0 == "-C" {getline; print}' "$TMP_ROOT/keygen.log")" = "alice#tag\$tag'o@example.invalid" ] || fail "copied guidance preserves email literally"
+[ "$(awk '$0 == "-f" {getline; print}' "$TMP_ROOT/keygen.log")" = "$Q/.ssh/quoted" ] || fail "copied guidance expands the key path"
+rm "$BIN/ssh-keygen"
+mkdir -p "$Q/.ssh"
+"$KEYGEN" -q -t ed25519 -N '' -f "$Q/.ssh/quoted"
+SSH_AUTH_SOCK=$SOCK ssh-add -q "$Q/.ssh/quoted" 2>/dev/null
+runo "$Q" workstation render
+runo "$Q" workstation check
+[ "$RC" = 0 ] || fail "complete ordinary identity passes standalone check"
+[ "$(cat "$OUT")" = 'identity: ok' ] || fail "successful check reports ok"
+pass "Git and copied shell commands preserve accepted values"
+
+echo "== 8. stale outputs removed"
 sed -i 's/^IDENTITIES=.*/IDENTITIES="gh_personal"/' "$WS/.config/dotfiles/identity.env"
 runo "$WS" workstation render
 if [ -e "$WS/.config/git/identity/gh_work.gitconfig" ] || [ -e "$WS/.config/git/identity/bb_work.gitconfig" ] \
   || [ -e "$WS/.config/dotfiles/pub/bb_work.pub" ]; then fail "a removed identity leaves its files behind"; fi
 [ -e "$WS/.config/git/identity/gh_personal.gitconfig" ] || fail "remaining identity kept"
-if grep -q bitbucket "$WS/.config/git/identities.gitconfig" "$WS/.ssh/config.d/identities"; then fail "removed identity's rules and aliases are gone"; fi
+expect_route "$WS" git@bitbucket.org:iqx-test/z.git NONE ""
+expect_route "$WS" git@bitbucket.org-work:iqx-test/z.git NONE ""
+resolved=$(ssh -G -F "$WS/.ssh/config.d/identities" bitbucket.org-work 2>/dev/null) || fail "SSH evaluates pruned aliases"
+[ "$(awk '$1 == "hostname" {print $2}' <<<"$resolved")" = bitbucket.org-work ] || fail "removed alias no longer maps to Bitbucket"
 [ "$(cat "$WS/.config/dotfiles/ssh-keys")" = "$WS/.ssh/id_ed25519_gh_personal" ] || fail "key list follows the identities"
 rm "$WS/.config/dotfiles/identity.env"
 runo "$WS" workstation render

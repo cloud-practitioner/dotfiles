@@ -205,7 +205,8 @@ and SSH key from a repo's **remote URL**, not from the folder it sits in:
   spelling (`git@host:owner/**`, `ssh://git@host/owner/**`, `https://host/owner/**`,
   `https://user@host/owner/**`, and the same for a legacy SSH alias when you set
   one), each pointing at `~/.config/git/identity/<label>.gitconfig`: `user.name`,
-  `user.email`, and `core.sshCommand = ssh -i "<key>" -o IdentitiesOnly=yes`.
+  `user.email`, and `core.sshCommand = ssh -i '<key>' -o IdentitiesOnly=yes`
+  (with `-F ~/.ssh/config.d/identities` in the container so legacy aliases resolve).
 - `programs.git` itself only sets `user.useConfigOnly = true` (a repo whose owner
   matches no identity **refuses the commit** instead of guessing one), pushes to
   `github.com` and `bitbucket.org` over SSH (`pushInsteadOf`; clones stay anonymous
@@ -229,7 +230,7 @@ interactive zsh, with one line) says there is no identity file yet. Then:
    `install -D -m 600 ~/.dotfiles/identity.env.example ~/.config/dotfiles/identity.env && ${EDITOR:-nvim} ~/.config/dotfiles/identity.env`
 2. List your identity labels in `IDENTITIES`, and per label set `<label>_HOST`
    (`github.com`, `bitbucket.org`), `<label>_OWNERS` (space-separated orgs or users,
-   as in the remote URL), `<label>_KEY` (the private key's path), `<label>_NAME`,
+   as in the remote URL), `<label>_KEY` (the private key's absolute or `~/` path), `<label>_NAME`,
    `<label>_EMAIL`, and optionally `<label>_ALIAS` (a legacy SSH host alias such as
    `github.com-work`, for old `git@github.com-work:org/repo` remotes). The file is
    parsed, never sourced, so `$(...)` and variables are not expanded; `_KEY` may

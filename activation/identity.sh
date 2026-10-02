@@ -7,7 +7,7 @@
 #   identity.sh check  workstation|container   # doctor: check only, exit 1 on problems
 #
 # Inputs (non-secret):
-#   $DOTFILES_IDENTITY_DIR (default ${XDG_CONFIG_HOME:-~/.config}/dotfiles)
+#   ~/.config/dotfiles
 #     identity.env     user-authored copy of identity.env.example
 #     pub/<label>.pub  public halves, exported here by the workstation render
 #                      so a container can select agent keys without ever
@@ -15,8 +15,8 @@
 #   $DOTFILES_REV      (workstation render) the dotfiles revision being applied
 # Outputs (generated; rewritten only when their content changes, removed when
 # identity.env goes away):
-#   ${XDG_CONFIG_HOME:-~/.config}/git/identities.gitconfig   includeIf rules
-#   ${XDG_CONFIG_HOME:-~/.config}/git/identity/<label>.gitconfig
+#   ~/.config/git/identities.gitconfig   includeIf rules
+#   ~/.config/git/identity/<label>.gitconfig
 #   ~/.ssh/config.d/identities                                legacy aliases
 #   workstation only, in the identity directory:
 #     pub/<label>.pub  public halves of the keys
@@ -34,14 +34,14 @@ case "$mode/$profile" in
   *) echo "usage: $0 render|check workstation|container" >&2; exit 2 ;;
 esac
 
-ID_DIR=${DOTFILES_IDENTITY_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/dotfiles}
+ID_DIR=$HOME/.config/dotfiles
 ID_FILE=$ID_DIR/identity.env
 PUB_DIR=$ID_DIR/pub
 KEYS_OUT=$ID_DIR/ssh-keys
 REV_OUT=$ID_DIR/applied-rev
-GIT_OUT=${XDG_CONFIG_HOME:-$HOME/.config}/git
+GIT_OUT=$HOME/.config/git
 SSH_OUT=$HOME/.ssh/config.d/identities
-TEMPLATE=${DOTFILES_TEMPLATE:-$HOME/.dotfiles/identity.env.example}
+TEMPLATE=$HOME/.dotfiles/identity.env.example
 
 problems=0
 say() { printf 'identity: %s\n' "$*" >&2; }
@@ -49,8 +49,8 @@ problem() { problems=$((problems + 1)); say "$*"; }
 tilde() { printf '%s\n' "${1/#"$HOME"\//\~/}"; }
 
 declare -A V=()
-# KEY=value parser: no sourcing, no expansion. Surrounding double or single
-# quotes are stripped; anything else on a line is an error.
+# KEY=value parser: no sourcing, no expansion. Surrounding double quotes
+# are stripped; anything else on a line is an error.
 parse() {
   local line key val n=0
   while IFS= read -r line || [ -n "$line" ]; do
@@ -58,13 +58,13 @@ parse() {
     case "$line" in '' | '#'*) continue ;; esac
     if [[ $line =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
       key=${BASH_REMATCH[1]} val=${BASH_REMATCH[2]}
-      if [[ $val =~ ^\"(.*)\"$ || $val =~ ^\'(.*)\'$ ]]; then val=${BASH_REMATCH[1]}; fi
+      if [[ $val =~ ^\"(.*)\"$ ]]; then val=${BASH_REMATCH[1]}; fi
       V[$key]=$val
     else
       problem "$(tilde "$ID_FILE"):$n is not a KEY=value line"
       return 1
     fi
-  done <"$ID_FILE"
+  done <"$ID_FILE" || { problem "cannot read $(tilde "$ID_FILE"): chmod u+r $(tilde "$ID_FILE")"; return 1; }
 }
 
 valid() { # name regex value
@@ -88,6 +88,10 @@ load() {
     valid "${l}_HOST" '^[A-Za-z0-9.-]+$' "${V[${l}_HOST]:-}" || ok=
     valid "${l}_OWNERS" '^[A-Za-z0-9._-]+( [A-Za-z0-9._-]+)*$' "${V[${l}_OWNERS]:-}" || ok=
     valid "${l}_KEY" '^~?[A-Za-z0-9._/-]+$' "${V[${l}_KEY]:-}" || ok=
+    case "${V[${l}_KEY]:-}" in
+      /* | '~/'*) ;;
+      *) problem "${l}_KEY must start with / or ~/ (relative paths are not supported)"; ok= ;;
+    esac
     valid "${l}_NAME" '^[^"\\]+$' "${V[${l}_NAME]:-}" || ok=
     valid "${l}_EMAIL" '^[^"\\ ]+@[^"\\ ]+$' "${V[${l}_EMAIL]:-}" || ok=
     [ -z "${V[${l}_ALIAS]:-}" ] || valid "${l}_ALIAS" '^[A-Za-z0-9.-]+$' "${V[${l}_ALIAS]}" || ok=
@@ -101,6 +105,16 @@ load() {
 }
 
 expand() { case "$1" in '~/'*) printf '%s\n' "$HOME/${1#'~/'}" ;; *) printf '%s\n' "$1" ;; esac; }
+
+git_quote() {
+  local value=$1
+  value=${value//\\/\\\\}
+  value=${value//\"/\\\"}
+  value=${value//$'\t'/\\t}
+  printf '"%s"' "$value"
+}
+
+shell_quote() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
 
 # The key ssh offers for an identity: on the workstation the private key path
 # (ssh reads <key>.pub beside it to pick the agent key, and can fall back to
@@ -150,22 +164,24 @@ render() {
     [ "$profile" = workstation ] && { rm -f "$KEYS_OUT"; rm -rf "$PUB_DIR"; }
     return 0
   fi
-  local l o h a key rules="$header" ssh="$header" keys='' pat
+  local l o h a key command rules="$header" ssh="$header" keys='' pat
   for l in "${LABELS[@]}"; do
     h=${V[${l}_HOST]} a=${V[${l}_ALIAS]:-} key=$(key_ref "$l")
+    command="ssh -i $(shell_quote "$key") -o IdentitiesOnly=yes"
+    [ "$profile" = workstation ] || command+=" -F $(shell_quote "$SSH_OUT")"
     write_if_changed "$GIT_OUT/identity/$l.gitconfig" "$header
 [user]
-	name = ${V[${l}_NAME]}
-	email = ${V[${l}_EMAIL]}
+	name = $(git_quote "${V[${l}_NAME]}")
+	email = $(git_quote "${V[${l}_EMAIL]}")
 [core]
-	sshCommand = ssh -i \"$key\" -o IdentitiesOnly=yes"
+	sshCommand = $(git_quote "$command")"
     for o in ${V[${l}_OWNERS]}; do
       for pat in "git@$h:$o/**" "ssh://git@$h/$o/**" "https://$h/$o/**" "https://*@$h/$o/**" \
         ${a:+"git@$a:$o/**"} ${a:+"ssh://git@$a/$o/**"}; do
         rules+=$'\n'"[includeIf \"hasconfig:remote.*.url:$pat\"]"$'\n'"	path = identity/$l.gitconfig"
       done
     done
-    [ -n "$a" ] && ssh+=$'\n'"Host $a"$'\n'"  HostName $h"$'\n'"  User git"$'\n'"  IdentityFile $key"$'\n'"  IdentitiesOnly yes"
+    [ -n "$a" ] && ssh+=$'\n'"Host $a"$'\n'"  HostName $h"$'\n'"  User git"$'\n'"  IdentityFile $(git_quote "$key")"$'\n'"  IdentitiesOnly yes"
     keys+=${keys:+$'\n'}$(expand "${V[${l}_KEY]}")
   done
   prune "$GIT_OUT/identity" .gitconfig "${LABELS[@]}"
@@ -201,8 +217,12 @@ check() {
     fi
     return
   fi
-  if [ "$profile" = workstation ] && [ -n "$(find "$ID_FILE" -maxdepth 0 \( ! -user "$(id -u)" -o -perm /022 \) 2>/dev/null)" ]; then
-    problem "$(tilde "$ID_FILE") must be yours and not group/world-writable: chmod 600 $(tilde "$ID_FILE")"
+  # A read-only container bind keeps the host's UID mapping; only ownership is skipped.
+  if [ "$profile" = workstation ] && [ "$(stat -c %u "$ID_FILE" 2>/dev/null)" != "$(id -u)" ]; then
+    problem "$(tilde "$ID_FILE") must be owned by you: chown $(id -un) $(tilde "$ID_FILE")"
+  fi
+  if [ -n "$(find "$ID_FILE" -maxdepth 0 -perm /022 2>/dev/null)" ]; then
+    problem "$(tilde "$ID_FILE") must not be group/world-writable: chmod 600 $(tilde "$ID_FILE")"
   fi
   load || return
   loaded=$(ssh-add -l 2>/dev/null); rc=$?
@@ -218,7 +238,7 @@ check() {
     if [ "$profile" = workstation ]; then
       if [ ! -f "$key" ]; then
         problem "$l: no private key at $kd. Create it yourself (this tool never does):"
-        say "    ssh-keygen -t ed25519 -C \"${V[${l}_EMAIL]}\" -f $kd"
+        say "    ssh-keygen -t ed25519 -C $(shell_quote "${V[${l}_EMAIL]}") -f $kd"
         case "${V[${l}_HOST]}" in
           github.com) say "    then add $kd.pub to the right GitHub account: https://github.com/settings/ssh/new" ;;
           bitbucket.org) say "    then add $kd.pub to Bitbucket: https://bitbucket.org/account/settings/ssh-keys/" ;;
@@ -256,9 +276,10 @@ check() {
   if [ -n "$v" ] && [ "$(printf '%s\n2.36.0\n' "$v" | sort -V | head -n1)" != 2.36.0 ]; then
     problem "git $v is older than 2.36 and ignores includeIf hasconfig:remote.*.url: put ~/.nix-profile/bin first on PATH"
   fi
-  if [ -n "${GIT_CONFIG_GLOBAL:-}" ]; then
+  if [ "${GIT_CONFIG_GLOBAL+set}" = set ]; then
     problem "GIT_CONFIG_GLOBAL=$GIT_CONFIG_GLOBAL hides ~/.config/git/config (and these identities); unset it"
-  elif [ -f "$HOME/.gitconfig" ] && git config --file "$HOME/.gitconfig" --get-regexp '^(user\.|includeif\.|url\.)' >/dev/null 2>&1; then
+  fi
+  if [ -f "$HOME/.gitconfig" ] && git config --file "$HOME/.gitconfig" --get-regexp '^(user\.|includeif\.|url\.)' >/dev/null 2>&1; then
     problem "~/.gitconfig sets user/includeIf/url keys that override these identities (git reads it last). Move them into $(tilde "$ID_FILE") and delete ~/.gitconfig."
   fi
 }

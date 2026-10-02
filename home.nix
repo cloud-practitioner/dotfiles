@@ -10,7 +10,7 @@ let
   # ~/.config/dotfiles/identity.env, never in this public repo. Activation
   # renders them (activation/identity.sh); this is where the workstation zsh
   # reads the key paths to load into an empty agent.
-  identityDir = "\${XDG_CONFIG_HOME:-$HOME/.config}/dotfiles";
+  identityDir = "$HOME/.config/dotfiles";
   # Moves these PATH entries right before ~/.nix-profile/bin, or to the front
   # without it, once each, so they win over the Nix profile's, the system's,
   # and WSL's Windows-interop (/mnt/*) copies: ~/.local/bin first (herdr from

@@ -24,7 +24,7 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-for tool in nix ssh; do
+for tool in nix ssh git; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"
 done
 dotfiles_test_tmproot ssh-config
@@ -50,27 +50,9 @@ ws_files=$(home_files "$WS")
 config="$ws_files/.ssh/config"
 [ -e "$config" ] || fail "$WS: ~/.ssh/config is generated"
 
-expected=$(cat <<'EOT'
-Include ~/.ssh/config.d/identities
-
-Host *
-  AddKeysToAgent yes
-  Compression no
-  ControlMaster no
-  ControlPath ~/.ssh/master-%r@%n:%p
-  ControlPersist no
-  ForwardAgent no
-  HashKnownHosts no
-  ServerAliveCountMax 3
-  ServerAliveInterval 0
-  UserKnownHostsFile ~/.ssh/known_hosts
-EOT
-)
-actual=$(cat "$config")
-[ "$actual" = "$expected" ] || fail "$WS: ~/.ssh/config matches, got:
-$actual"
-assert_not_contains "$actual" id_ed25519 "$WS: no key path is hard-coded"
-pass "$WS: ~/.ssh/config is the identities include plus the * defaults"
+ssh_value() {
+  awk -v key="$1" '$1 == key {sub(/^[^ ]+ /, ""); print}' <<<"${2:-$resolved}"
+}
 
 # A legacy alias, rendered the way activation does. ssh expands `~` from the
 # passwd entry, not $HOME, so point the include at the scratch HOME.
@@ -91,27 +73,59 @@ env -i HOME="$H" PATH="$PATH" bash "$ROOT/activation/identity.sh" render worksta
 sed "s|~/.ssh/config.d/identities|$H/.ssh/config.d/identities|" "$config" >"$H/ssh_config"
 
 resolved=$(ssh -G -F "$H/ssh_config" github.com-work 2>&1) || fail "$WS: ssh -G github.com-work failed: $resolved"
-assert_contains "$resolved" $'\n'"hostname github.com"$'\n' "$WS: github.com-work resolves to github.com"
-assert_contains "$resolved" $'\n'"user git"$'\n' "$WS: github.com-work logs in as git"
-assert_contains "$resolved" $'\n'"identitiesonly yes"$'\n' "$WS: github.com-work offers only its own key"
-assert_contains "$resolved" "$H/.ssh/id_ed25519_gh_work"$'\n' "$WS: github.com-work uses its key"
-[ "$(printf '%s\n' "$resolved" | grep -c '^identityfile ')" = 1 ] \
-  || fail "$WS: github.com-work has exactly one identity file"
-assert_contains "$resolved" $'\n'"addkeystoagent true"$'\n' "$WS: github.com-work adds keys to the agent"
+[ "$(ssh_value hostname)" = github.com ] || fail "$WS: github.com-work resolves to github.com"
+[ "$(ssh_value user)" = git ] || fail "$WS: github.com-work logs in as git"
+[ "$(ssh_value identitiesonly)" = yes ] || fail "$WS: github.com-work offers only its own key"
+[ "$(ssh_value identityfile)" = "$H/.ssh/id_ed25519_gh_work" ] || fail "$WS: github.com-work uses exactly its own key"
+cat >"$H/defaults" <<'EOT'
+Host github.com-work
+  HostName github.com
+  User git
+Host *
+  AddKeysToAgent yes
+  Compression no
+  ControlMaster no
+  ControlPath ~/.ssh/master-%r@%n:%p
+  ControlPersist no
+  ForwardAgent no
+  HashKnownHosts no
+  ServerAliveCountMax 3
+  ServerAliveInterval 0
+  UserKnownHostsFile ~/.ssh/known_hosts
+EOT
+defaults=$(ssh -G -F "$H/defaults" github.com-work 2>/dev/null) || fail "SSH consumes default settings fixture"
+for key in addkeystoagent compression controlmaster controlpath controlpersist forwardagent hashknownhosts serveralivecountmax serveraliveinterval userknownhostsfile; do
+  [ "$(ssh_value "$key")" = "$(ssh_value "$key" "$defaults")" ] || fail "$WS: $key retains its default setting"
+done
 pass "$WS: a rendered legacy alias resolves to git@github.com with only its own key"
 
 for profile in "$WS" "$CT"; do
   files=$(home_files "$profile")
-  gitcfg=$(cat "$files/.config/git/config") || fail "$profile: ~/.config/git/config is generated"
-  assert_contains "$gitcfg" $'useConfigOnly = true' "$profile: git refuses to guess an identity"
-  assert_contains "$gitcfg" $'[url "git@github.com:"]\n\tpushInsteadOf = "https://github.com/"' "$profile: github.com pushes over SSH"
-  assert_contains "$gitcfg" $'[url "git@bitbucket.org:"]\n\tpushInsteadOf = "https://bitbucket.org/"' "$profile: bitbucket.org pushes over SSH"
-  assert_contains "$gitcfg" $'[include]\n\tpath = "~/.config/git/identities.gitconfig"' "$profile: includes the rendered identity rules"
-  assert_not_contains "$gitcfg" 'gitdir' "$profile: no folder rules"
-  assert_not_contains "$gitcfg" 'insteadOf = ' "$profile: no clone rewrites"
-  assert_not_contains "$gitcfg" 'gpg' "$profile: no gpg section"
-  [ "$(grep -n '^\[include\]' <<<"$gitcfg" | cut -d: -f1)" -gt "$(grep -n '^\[user\]' <<<"$gitcfg" | cut -d: -f1)" ] \
-    || fail "$profile: the identity include comes after the plain settings"
+  gitcfg=$files/.config/git/config
+  [ -f "$gitcfg" ] || fail "$profile: ~/.config/git/config is generated"
+  [ "$(git config --file "$gitcfg" --bool user.useConfigOnly)" = true ] || fail "$profile: git refuses to guess an identity"
+  [ "$(git config --file "$gitcfg" --get-all url.git@github.com:.pushInsteadOf)" = https://github.com/ ] || fail "$profile: github.com push rewrite"
+  [ "$(git config --file "$gitcfg" --get-all url.git@bitbucket.org:.pushInsteadOf)" = https://bitbucket.org/ ] || fail "$profile: bitbucket.org push rewrite"
+  [ "$(git config --file "$gitcfg" --get-all include.path)" = '~/.config/git/identities.gitconfig' ] || fail "$profile: includes the rendered identities"
+  if git config --file "$gitcfg" --get-regexp '^(includeif\.|url\..*\.insteadof$|gpg\.)' >/dev/null; then
+    fail "$profile: no conditional global rules, clone rewrites or signing settings"
+  fi
+  mkdir -p "$H/.config/git"
+  install -m 600 "$gitcfg" "$H/.config/git/config" || fail "$profile: global config fixture installed"
+  repo=$TMP_ROOT/git-probe
+  rm -rf "$repo"
+  git_home() { env -i HOME="$H" XDG_CONFIG_HOME="$H/.config" GIT_CONFIG_NOSYSTEM=1 PATH="$PATH" git "$@"; }
+  git_home init -q "$repo" || fail "$profile: fixture repository initialized"
+  git_home -C "$repo" remote add origin https://github.com/work-org/repo.git
+  [ "$(git_home -C "$repo" config user.email)" = work@example.invalid ] || fail "$profile: rendered identity is consumed"
+  [ "$(git_home -C "$repo" remote get-url origin)" = https://github.com/work-org/repo.git ] || fail "$profile: fetch URL stays HTTPS"
+  [ "$(git_home -C "$repo" remote get-url --push origin)" = git@github.com:work-org/repo.git ] || fail "$profile: Git pushes to GitHub over SSH"
+  git_home -C "$repo" remote set-url origin https://bitbucket.org/other/repo.git
+  [ "$(git_home -C "$repo" remote get-url origin)" = https://bitbucket.org/other/repo.git ] || fail "$profile: Bitbucket fetch URL stays HTTPS"
+  [ "$(git_home -C "$repo" remote get-url --push origin)" = git@bitbucket.org:other/repo.git ] || fail "$profile: Git pushes to Bitbucket over SSH"
+  if git_home -C "$repo" commit -q --allow-empty -m unmatched >/dev/null 2>&1; then
+    fail "$profile: unmatched owner must refuse the commit"
+  fi
   pass "$profile: global git config"
 done
 
