@@ -14,9 +14,8 @@ case "$(uname -m)" in
   *) echo "Unsupported CPU: $(uname -m)" >&2; exit 1 ;;
 esac
 # Inside a devcontainer, apply the container profile: same shell/tools but no
-# host SSH agent/config. The devcontainer (cloud-practitioner/agentic-devcontainer)
-# bind-mounts the host ~/.ssh read-only, proxies the WSL2 ssh-agent socket, and
-# recreates the host aliases in its Dockerfile.
+# host SSH agent/config. See README's Devcontainers section for the
+# public-key-only identity mount and forwarded-agent contract.
 PROFILE_PREFIX=""
 if [ -f /.dockerenv ] || [ -n "${REMOTE_CONTAINERS:-}" ] || [ -n "${CODESPACES:-}" ]; then
   PROFILE_PREFIX="container-"

@@ -1,13 +1,14 @@
-{ config, pkgs, lib, user, profile ? "workstation", ... }:
+{ config, pkgs, lib, user, profile ? "workstation", dotfilesRev ? "unknown", ... }:
 
 let
   dotfiles = "${config.home.homeDirectory}/.dotfiles";
-  # The "container" profile drops host-only SSH machinery (agent + aliased
-  # identities) so the same shell/tools can be reused inside a devcontainer
+  # The "container" profile drops the agent service, ~/.ssh/config, and startup
+  # key loading so the same shell/tools can be reused inside a devcontainer
   # that borrows the WSL2 host's forwarded agent instead.
   isWorkstation = profile == "workstation";
-  # Private keys behind the SSH host aliases (programs.ssh), which the
-  # workstation zsh init also loads into an empty agent.
+  # Linux zsh reads the key list rendered by activation/identity.sh here;
+  # sshKeys below retains the existing macOS alias paths.
+  identityDir = "$HOME/.config/dotfiles";
   sshKeys = {
     ghWork = "~/.ssh/id_ed25519_gh_work";
     ghPersonal = "~/.ssh/id_ed25519_gh_personal";
@@ -186,14 +187,29 @@ in
           aarch64|arm64) sys=aarch64-linux ;;
           *) echo "unsupported $(uname -m)" >&2; return 1 ;;
         esac
-        git -C "$HOME/.dotfiles" pull --ff-only || return 1
+        # Read the mounted workstation revision; README's Devcontainers
+        # section owns revision-following behavior and its fallbacks.
+        local rev
+        rev=$(cat "$HOME/.config/dotfiles/applied-rev" 2>/dev/null)
+        if [ -n "$rev" ]; then
+          git -C "$HOME/.dotfiles" fetch -q origin || return 1
+          case "$rev" in *-dirty) echo "hm-update: the workstation applied uncommitted dotfiles changes; using ''${rev%-dirty}" >&2 ;; esac
+          if ! git -C "$HOME/.dotfiles" checkout -q --detach "''${rev%-dirty}" 2>/dev/null; then
+            echo "hm-update: workstation dotfiles revision ''${rev%-dirty} is not on origin (unpushed?); using origin/main" >&2
+            git -C "$HOME/.dotfiles" checkout -q --detach origin/main || return 1
+          fi
+        else
+          # Without a revision, keep the current branch; leave detached HEAD for main.
+          git -C "$HOME/.dotfiles" symbolic-ref -q HEAD >/dev/null || git -C "$HOME/.dotfiles" checkout -q main || return 1
+          git -C "$HOME/.dotfiles" pull --ff-only || return 1
+        fi
         nix run --inputs-from "$HOME/.dotfiles" home-manager -- switch -b backup --flake "$HOME/.dotfiles#$(id -un)@container-$sys"
       }
 
       # Cheap, non-blocking welcome note (once per terminal); no network calls.
       if [[ -o interactive && -z "''${HM_WELCOME_SHOWN:-}" && -d "$HOME/.dotfiles/.git" ]]; then
         export HM_WELCOME_SHOWN=1
-        print -P "%F{blue}dotfiles%f $(git -C "$HOME/.dotfiles" rev-parse --short HEAD 2>/dev/null) - run %F{green}hm-update%f to pull latest and re-switch"
+        print -P "%F{blue}dotfiles%f $(git -C "$HOME/.dotfiles" rev-parse --short HEAD 2>/dev/null) - run %F{green}hm-update%f to follow the workstation's revision and re-switch"
       fi
     '' + lib.optionalString (pkgs.stdenv.isLinux && isWorkstation) ''
 
@@ -203,18 +219,24 @@ in
       [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 
       # The systemd ssh-agent starts empty; when it is reachable but has no
-      # identities (exit 1), load the keys so `ssh-add -l` is populated before
+      # identities (exit 1), load the keys listed in identity.env (rendered to
+      # ssh-keys by activation/identity.sh) so `ssh-add -l` is populated before
       # launching devcontainers. Skips when keys are present (0) or no agent (2).
       if [[ -o interactive ]]; then
         ssh-add -l >/dev/null 2>&1
         if [ "$?" = 1 ]; then
-          # Catch Ctrl+C so cancelling a passphrase prompt stops only ssh-add, not the rest of .zshrc.
-          trap : INT
-          ssh-add ${sshKeys.ghWork} \
-                  ${sshKeys.ghPersonal} \
-                  ${sshKeys.bbWork} 2>/dev/null
-          trap - INT
+          __id_keys=(''${(f)"$(cat "${identityDir}/ssh-keys" 2>/dev/null)"})
+          if (( ''${#__id_keys} )); then
+            # Catch Ctrl+C so cancelling a passphrase prompt stops only ssh-add, not the rest of .zshrc.
+            trap : INT
+            ssh-add $__id_keys 2>/dev/null
+            trap - INT
+          fi
+          unset __id_keys
         fi
+        # One line, no network: a fresh workstation has no identity file yet.
+        [ -f "${identityDir}/identity.env" ] ||
+          print -P "%F{yellow}dotfiles%f no ~/.config/dotfiles/identity.env yet (git and SSH identities): see the README, or run %F{green}~/.dotfiles/activation/identity.sh check workstation%f"
       fi
     '' + lib.optionalString pkgs.stdenv.isLinux ''
 
@@ -237,20 +259,14 @@ in
     };
   };
 
-  # SSH client config lives in the repo so a throwaway WSL2 instance comes up
-  # with the same host aliases every time. The private keys themselves are not
-  # managed by Nix - drop them into ~/.ssh out of band. Workstation-only: the
-  # devcontainer (cloud-practitioner/agentic-devcontainer) reuses these keys via
-  # a read-only ~/.ssh bind mount plus the proxied WSL2 ssh-agent socket, under
-  # both VS Code and the devcontainer CLI. This ~/.ssh/config is a Nix-store
-  # symlink that dangles inside the container, so that repo's Dockerfile
-  # recreates these host aliases.
+  # See README's SSH section for Linux identity setup and the unchanged macOS aliases.
   # Blocks use OpenSSH directive names (ssh_config(5)). Home Manager's legacy
   # defaults are off (enableDefaultConfig), so the `*` block spells out the
-  # ones this config always had, keeping ~/.ssh/config unchanged.
+  # ones this config always had, preserving the default SSH options.
   programs.ssh = lib.mkIf isWorkstation {
     enable = true;
     enableDefaultConfig = false;
+    includes = lib.optional pkgs.stdenv.isLinux "~/.ssh/config.d/identities";
     settings = {
       "*" = {
         AddKeysToAgent = "yes";
@@ -264,6 +280,7 @@ in
         ControlPath = "~/.ssh/master-%r@%n:%p";
         ControlPersist = "no";
       };
+    } // lib.optionalAttrs pkgs.stdenv.isDarwin {
       "github.com-personal" = {
         HostName = "github.com";
         User = "git";
@@ -284,6 +301,32 @@ in
       };
     };
   };
+
+  # Personal identity values stay out of this public repo; see README's Git
+  # identity section for Linux remote routing and push transport rules.
+  # Git ignores a missing rendered include, so useConfigOnly must prevent
+  # commits with a guessed identity until setup is complete.
+  programs.git = lib.mkIf pkgs.stdenv.isLinux {
+    enable = true;
+    # With stateVersion 24.11 Home Manager would otherwise add a gpg section.
+    signing.format = null;
+    settings = {
+      user.useConfigOnly = true;
+      url."git@github.com:".pushInsteadOf = "https://github.com/";
+      url."git@bitbucket.org:".pushInsteadOf = "https://bitbucket.org/";
+    };
+    includes = [ { path = "~/.config/git/identities.gitconfig"; } ];
+  };
+  # On every Linux switch: render the identity files, export the public keys
+  # and record the applied dotfiles revision (workstation), and check the
+  # keys, agent, and git. It only warns, so a fresh machine still switches.
+  home.activation.identity = lib.mkIf pkgs.stdenv.isLinux (
+    lib.hm.dag.entryAfter [ "linkGeneration" ] ''
+      run env PATH="${lib.makeBinPath (with pkgs; [ bash coreutils findutils gawk git gnugrep gnused openssh ])}:$PATH" \
+        DOTFILES_REV=${lib.escapeShellArg dotfilesRev} \
+        ${pkgs.bash}/bin/bash ${./activation/identity.sh} render ${if isWorkstation then "workstation" else "container"}
+    ''
+  );
 
   # WSL2 runs systemd, so let it own ssh-agent: SSH_AUTH_SOCK is always set and
   # the socket can be forwarded into devcontainers. macOS has its own agent, and
