@@ -223,10 +223,10 @@ check() {
     return
   fi
   # A read-only container bind keeps the host's UID mapping; only ownership is skipped.
-  if [ "$profile" = workstation ] && [ "$(stat -c %u "$ID_FILE" 2>/dev/null)" != "$(id -u)" ]; then
+  if [ "$profile" = workstation ] && [ "$(stat -L -c %u "$ID_FILE" 2>/dev/null)" != "$(id -u)" ]; then
     problem "$(tilde "$ID_FILE") must be owned by you: chown $(id -un) $(tilde "$ID_FILE")"
   fi
-  if [ -n "$(find "$ID_FILE" -maxdepth 0 -perm /022 2>/dev/null)" ]; then
+  if [ -n "$(find -L "$ID_FILE" -maxdepth 0 -perm /022 2>/dev/null)" ]; then
     problem "$(tilde "$ID_FILE") must not be group/world-writable: chmod 600 $(tilde "$ID_FILE")"
   fi
   load || return
@@ -251,7 +251,7 @@ check() {
         esac
         continue
       fi
-      case "$(stat -c %a "$key" 2>/dev/null)" in
+      case "$(stat -L -c %a "$key" 2>/dev/null)" in
         600 | 400) ;;
         *) problem "$l: $kd must be mode 600: chmod 600 $kd" ;;
       esac
@@ -285,12 +285,12 @@ check() {
     problem "GIT_CONFIG_GLOBAL=$GIT_CONFIG_GLOBAL hides ~/.config/git/config (and these identities); unset it"
   fi
   if [ -f "$HOME/.gitconfig" ]; then
-    git config --includes --file "$HOME/.gitconfig" --get-regexp '^(user\.|includeif\.|url\.)' >/dev/null 2>&1
+    git config --includes --file "$HOME/.gitconfig" --get-regexp '^(user\.|includeif\.|url\.|core\.sshcommand$)' >/dev/null 2>&1
     rc=$?
     if [ "$rc" = 0 ]; then
       # The diagnostic deliberately shows a literal home-relative path.
       # shellcheck disable=SC2088
-      problem "~/.gitconfig sets user/includeIf/url keys that override these identities (git reads it last). Move them into $(tilde "$ID_FILE") and delete ~/.gitconfig."
+      problem "~/.gitconfig sets user/includeIf/url/core.sshCommand keys that override these identities (git reads it last). Move them into $(tilde "$ID_FILE") and delete ~/.gitconfig."
     elif [ "$rc" != 1 ] || [ ! -r "$HOME/.gitconfig" ]; then
       problem "cannot inspect ~/.gitconfig or its includes. Run 'git config --includes --file ~/.gitconfig --list', then fix its parse/read errors."
     fi

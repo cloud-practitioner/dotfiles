@@ -59,13 +59,18 @@ ssh_value() {
 H="$TMP_ROOT/home"
 mkdir -p "$H/.config/dotfiles" "$H/.ssh"
 cat >"$H/.config/dotfiles/identity.env" <<'EOT'
-IDENTITIES="gh_work"
+IDENTITIES="gh_work bb_work"
 gh_work_HOST=github.com
 gh_work_OWNERS="work-org"
 gh_work_KEY=~/.ssh/id_ed25519_gh_work
 gh_work_NAME="Test Work"
 gh_work_EMAIL="work@example.invalid"
 gh_work_ALIAS=github.com-work
+bb_work_HOST=bitbucket.org
+bb_work_OWNERS=work-space
+bb_work_KEY=~/.ssh/id_ed25519_bb_work
+bb_work_NAME="Test BB"
+bb_work_EMAIL=bb@example.invalid
 EOT
 chmod 600 "$H/.config/dotfiles/identity.env"
 env -i HOME="$H" PATH="$PATH" bash "$ROOT/activation/identity.sh" render workstation >/dev/null 2>&1
@@ -117,12 +122,24 @@ for profile in "$WS" "$CT"; do
   git_home() { env -i HOME="$H" XDG_CONFIG_HOME="$H/.config" GIT_CONFIG_NOSYSTEM=1 PATH="$PATH" git "$@"; }
   git_home init -q "$repo" || fail "$profile: fixture repository initialized"
   git_home -C "$repo" remote add origin https://github.com/work-org/repo.git
-  [ "$(git_home -C "$repo" config user.email)" = work@example.invalid ] || fail "$profile: rendered identity is consumed"
-  [ "$(git_home -C "$repo" remote get-url origin)" = https://github.com/work-org/repo.git ] || fail "$profile: fetch URL stays HTTPS"
-  [ "$(git_home -C "$repo" remote get-url --push origin)" = git@github.com:work-org/repo.git ] || fail "$profile: Git pushes to GitHub over SSH"
+  for host in github.com bitbucket.org; do
+    case "$host" in
+      github.com) owner=work-org; email=work@example.invalid ;;
+      bitbucket.org) owner=work-space; email=bb@example.invalid ;;
+    esac
+    for authority in "$host" "someone@$host"; do
+      url=https://$authority/$owner/repo.git
+      case "$authority" in
+        "$host") push=git@$host:$owner/repo.git ;;
+        *) push=$url ;;
+      esac
+      git_home -C "$repo" remote set-url origin "$url" || fail "$profile: remote URL set"
+      [ "$(git_home -C "$repo" config user.email)" = "$email" ] || fail "$profile: $url selects the commit identity"
+      [ "$(git_home -C "$repo" remote get-url origin)" = "$url" ] || fail "$profile: $url fetch URL stays HTTPS"
+      [ "$(git_home -C "$repo" remote get-url --push origin)" = "$push" ] || fail "$profile: $url push URL is $push"
+    done
+  done
   git_home -C "$repo" remote set-url origin https://bitbucket.org/other/repo.git
-  [ "$(git_home -C "$repo" remote get-url origin)" = https://bitbucket.org/other/repo.git ] || fail "$profile: Bitbucket fetch URL stays HTTPS"
-  [ "$(git_home -C "$repo" remote get-url --push origin)" = git@bitbucket.org:other/repo.git ] || fail "$profile: Git pushes to Bitbucket over SSH"
   if git_home -C "$repo" commit -q --allow-empty -m unmatched >/dev/null 2>&1; then
     fail "$profile: unmatched owner must refuse the commit"
   fi

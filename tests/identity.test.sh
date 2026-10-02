@@ -247,7 +247,7 @@ runo "$WS" workstation check GIT_CONFIG_GLOBAL=
 out=$(cat "$OUT")
 [ "$RC" = 1 ] || fail "empty-but-set GIT_CONFIG_GLOBAL fails check"
 assert_contains "$out" 'GIT_CONFIG_GLOBAL= hides' "warns about empty-but-set GIT_CONFIG_GLOBAL"
-assert_contains "$out" "~/.gitconfig sets user/includeIf/url keys" "also warns about an overriding ~/.gitconfig"
+assert_contains "$out" "~/.gitconfig sets user/includeIf/url/core.sshCommand keys" "also warns about an overriding ~/.gitconfig"
 rm "$WS/.gitconfig"
 chmod 666 "$D/identity.env"
 for profile in workstation container; do
@@ -260,7 +260,7 @@ chmod 600 "$D/identity.env"
 STAT=$(command -v stat)
 cat >"$BIN/stat" <<SHIM
 #!/bin/sh
-if [ "\$1" = -c ] && [ "\$2" = %u ]; then
+if [ "\$1" = -L ] && [ "\$2" = -c ] && [ "\$3" = %u ]; then
   echo 999999
 else
   exec "$STAT" "\$@"
@@ -424,11 +424,16 @@ expect_config_problem() {
     assert_not_contains "$(cat "$OUT")" 'identity: ok' "config problems are never reported as ok"
   done
 }
+legacy_command='ssh -i ~/.ssh/old -o IdentitiesOnly=yes'
 for profile in workstation container; do
   if [ "$profile" = workstation ]; then h=$Q; else h=$PC; fi
+  git config --file "$h/.gitconfig" core.sshCommand "$legacy_command"
+  [ "$(gitrun "$h" -C "$h" config core.sshCommand)" = "$legacy_command" ] || fail "Git consumes the direct legacy SSH command"
+  expect_config_problem "$h" "$profile" '~/.gitconfig sets user/includeIf/url/core.sshCommand keys'
+  rm "$h/.gitconfig"
   git config --file "$h/.gitconfig" include.path legacy-parent.gitconfig
   git config --file "$h/legacy-parent.gitconfig" include.path legacy-leaf.gitconfig
-  for field in user.email 'includeIf.gitdir:~/legacy/.path' url.git@github.com:.pushInsteadOf; do
+  for field in user.email 'includeIf.gitdir:~/legacy/.path' url.git@github.com:.pushInsteadOf core.sshCommand; do
     rm -f "$h/legacy-leaf.gitconfig"
     case "$field" in
       user.email)
@@ -436,12 +441,16 @@ for profile in workstation container; do
         git config --file "$h/legacy-leaf.gitconfig" user.name 'Legacy User' ;;
       includeIf.*) value=unused.gitconfig ;;
       url.*) value=https://github.com/ ;;
+      core.sshCommand) value=$legacy_command ;;
     esac
     git config --file "$h/legacy-leaf.gitconfig" "$field" "$value"
     if [ "$field" = user.email ]; then
       [ "$(gitrun "$h" -C "$h" config user.email)" = legacy@example.invalid ] || fail "Git consumes the nested legacy identity"
     fi
-    expect_config_problem "$h" "$profile" '~/.gitconfig sets user/includeIf/url keys'
+    if [ "$field" = core.sshCommand ]; then
+      [ "$(gitrun "$h" -C "$h" config core.sshCommand)" = "$legacy_command" ] || fail "Git consumes the nested legacy SSH command"
+    fi
+    expect_config_problem "$h" "$profile" '~/.gitconfig sets user/includeIf/url/core.sshCommand keys'
   done
   rm -f "$h/legacy-leaf.gitconfig"
   git config --file "$h/legacy-leaf.gitconfig" core.editor nvim
@@ -468,7 +477,67 @@ for profile in workstation container; do
 done
 pass "global config checks follow includes and distinguish inspection failures"
 
-echo "== 10. stale outputs removed"
+echo "== 10. symlink metadata follows consumed targets"
+mv "$Q/.config/dotfiles/identity.env" "$Q/.config/dotfiles/identity.target"
+ln -s identity.target "$Q/.config/dotfiles/identity.env"
+mv "$Q/.ssh/quoted" "$Q/.ssh/quoted.target"
+ln -s quoted.target "$Q/.ssh/quoted"
+for key_mode in 400 600; do
+  chmod "$key_mode" "$Q/.ssh/quoted.target"
+  for mode in check render; do
+    runo "$Q" workstation "$mode"
+    [ "$RC" = 0 ] || fail "linked mode-$key_mode key and safe identity target are accepted"
+    assert_not_contains "$(cat "$OUT")" 'must be' "safe targets have no ownership or mode warnings"
+  done
+done
+chmod 644 "$Q/.ssh/quoted.target"
+for mode in check render; do
+  runo "$Q" workstation "$mode"
+  if [ "$mode" = check ]; then
+    [ "$RC" = 1 ] || fail "linked loose key fails check"
+  else
+    [ "$RC" = 0 ] || fail "linked loose key only warns during activation"
+  fi
+  assert_contains "$(cat "$OUT")" 'quoted: ~/.ssh/quoted must be mode 600: chmod 600 ~/.ssh/quoted' "key guidance describes the consumed target's mode"
+done
+chmod 600 "$Q/.ssh/quoted.target"
+chmod 666 "$Q/.config/dotfiles/identity.target"
+for profile in workstation container; do
+  if [ "$profile" = workstation ]; then h=$Q; else h=$PC; fi
+  for mode in check render; do
+    runo "$h" "$profile" "$mode"
+    if [ "$mode" = check ]; then
+      [ "$RC" = 1 ] || fail "$profile rejects a writable identity target"
+    else
+      [ "$RC" = 0 ] || fail "$profile activation only warns about a writable target"
+    fi
+    assert_contains "$(cat "$OUT")" 'must not be group/world-writable: chmod 600 ~/.config/dotfiles/identity.env' "$profile checks the linked identity target"
+  done
+done
+chmod 600 "$Q/.config/dotfiles/identity.target"
+mv "$Q/.ssh/quoted.target" "$Q/.ssh/quoted.target.saved"
+runo "$Q" workstation check
+[ "$RC" = 1 ] || fail "dangling key link is missing"
+assert_contains "$(cat "$OUT")" 'no private key at ~/.ssh/quoted' "dangling key gets missing-key guidance"
+runo "$PC" container check
+[ "$RC" = 0 ] || fail "container uses the exported public key, not the private target"
+mv "$Q/.ssh/quoted.target.saved" "$Q/.ssh/quoted.target"
+mv "$Q/.config/dotfiles/identity.target" "$Q/.config/dotfiles/identity.target.saved"
+for profile in workstation container; do
+  if [ "$profile" = workstation ]; then h=$Q; else h=$PC; fi
+  runo "$h" "$profile" check
+  [ "$RC" = 1 ] || fail "$profile rejects a dangling identity link"
+  assert_contains "$(cat "$OUT")" 'no ~/.config/dotfiles/identity.env' "$profile diagnoses the missing identity target"
+done
+mv "$Q/.config/dotfiles/identity.target.saved" "$Q/.config/dotfiles/identity.target"
+for profile in workstation container; do
+  if [ "$profile" = workstation ]; then h=$Q; else h=$PC; fi
+  runo "$h" "$profile" check
+  [ "$RC" = 0 ] || fail "$profile succeeds again after targets are restored"
+done
+pass "symlink checks use target permissions and preserve container public-key selection"
+
+echo "== 11. stale outputs removed"
 sed -i 's/^IDENTITIES=.*/IDENTITIES="gh_personal"/' "$WS/.config/dotfiles/identity.env"
 runo "$WS" workstation render
 if [ -e "$WS/.config/git/identity/gh_work.gitconfig" ] || [ -e "$WS/.config/git/identity/bb_work.gitconfig" ] \

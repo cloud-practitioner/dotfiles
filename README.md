@@ -215,11 +215,13 @@ not from the folder it sits in:
   `~/.config/git/identity/<label>.gitconfig`: `user.name`,
   `user.email`, and `core.sshCommand = ssh -i '<key>' -o IdentitiesOnly=yes`
   (with `-F ~/.ssh/config.d/identities` in the container so legacy aliases resolve).
-- `programs.git` itself only sets `user.useConfigOnly = true` (a repo whose owner
-  matches no identity **refuses the commit** instead of guessing one), pushes to
-  `github.com` and `bitbucket.org` over SSH (`pushInsteadOf`; clones stay anonymous
-  HTTPS), and includes the rendered file. There are no folder (`gitdir:`) rules
-  and no `insteadOf`.
+- `programs.git` itself sets `user.useConfigOnly = true` (a repo whose owner
+  matches no identity **refuses the commit** instead of guessing one) and includes
+  the rendered file. `pushInsteadOf` sends pushes for plain `https://github.com/`
+  and `https://bitbucket.org/` remotes over SSH, while their fetch URLs stay HTTPS.
+  User-qualified HTTPS remotes (`https://user@host/...`) deliberately select the
+  commit identity but keep pushing over HTTPS for credential-based access.
+  There are no folder (`gitdir:`) rules and no `insteadOf`.
 - Needs git 2.36 or later; older git ignores the rules silently, so the check
   reports the version. A repo with remotes on two identities gets the later one in
   `IDENTITIES`, and owners match case-sensitively, as spelled in the remote URL.
@@ -227,7 +229,7 @@ not from the folder it sits in:
   when `identity.env` goes away. Edit `identity.env`, never the rendered files.
 - `git config --global` writes fail on the read-only Home Manager file; reads
   still work. That is intended. `GIT_CONFIG_GLOBAL` set, or a `~/.gitconfig` with
-  `user.`, `includeIf.` or `url.` keys, including keys reached through its
+  `user.`, `includeIf.`, `url.` or `core.sshCommand` keys, including keys reached through its
   includes (git reads it last),
   would mask the identities, so the check flags both. Unreadable or malformed
   Git configuration is reported separately.
