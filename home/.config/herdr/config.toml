@@ -22,5 +22,5 @@ name = "rose-pine"
 auto_switch = false
 
 [session]
-# Restored panes come back as plain shells; firstmate relaunches each worker with its own launch environment.
+# Firstmate must supply each worker's launch environment; herdr must not resume it.
 resume_agents_on_restore = false

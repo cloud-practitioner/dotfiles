@@ -351,9 +351,7 @@ in
     config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.config/wezterm";
   home.file.".config/nvim".source =
     config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.config/nvim";
-  # Only the authored config.toml is linked, so ~/.config/herdr stays a real directory:
-  # herdr's runtime state (session.json, session-snapshots/, sockets, logs) lives there
-  # instead of inside this checkout, and a devcontainer can bind-mount it.
+  # Keep herdr's writable state out of the checkout; see README's symlink section.
   home.file.".config/herdr/config.toml".source =
     config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.config/herdr/config.toml";
   home.activation.herdrConfigUnlink = lib.hm.dag.entryBefore [ "checkLinkTargets" ] ''
