@@ -356,6 +356,10 @@ in
   # instead of inside this checkout, and a devcontainer can bind-mount it.
   home.file.".config/herdr/config.toml".source =
     config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.config/herdr/config.toml";
+  home.activation.herdrConfigUnlink = lib.hm.dag.entryBefore [ "checkLinkTargets" ] ''
+    run ${pkgs.bash}/bin/bash ${./activation/herdr-config-unlink.sh} \
+      ${lib.escapeShellArg builtins.storeDir}
+  '';
   home.file.".claude/settings.json".source =
     config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.claude/settings.json";
 
