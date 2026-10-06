@@ -16,6 +16,12 @@ copy_mode  = "prefix+y"  # herdr's copy-mode entry key; copy-mode's own internal
 [ui]
 # Agents panel order: explicit choice of "spaces" (grouped by space, the default) over "priority".
 agent_panel_sort = "spaces"
+# Agent status indicators drawn as symbols.
+status_indicators = "symbols"
+
+[ui.toast]
+# Notifications are delivered by herdr itself.
+delivery = "herdr"
 
 [theme]
 name = "rose-pine"
