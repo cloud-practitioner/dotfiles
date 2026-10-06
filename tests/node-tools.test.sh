@@ -86,12 +86,29 @@ AGY_INSTALL="antigravity-installer tty=no dir=%HOME%/.local/bin"
 PI_REMOVE="pnpm remove -g @earendil-works/pi-coding-agent"
 COPILOT_REMOVE="pnpm remove -g @github/copilot"
 export NODE_TOOLS_LOG="$TMP_ROOT/calls.log"
-unset NVM_DIR NVM_BIN NVM_INC PNPM_HOME XDG_DATA_HOME NPM_CONFIG_PREFIX
+export REAL_NODE=$(command -v node) NODE_TOOLS_TEST_PATH=$PATH
+export REAL_PNPM=$(command -v pnpm)
+[ -n "$REAL_NODE" ] && [ -n "$REAL_PNPM" ] || fail "node and pnpm are required for configuration-consumer checks"
+unset NVM_DIR NVM_BIN NVM_INC PNPM_HOME XDG_DATA_HOME XDG_STATE_HOME NPM_CONFIG_PREFIX
 
 # --- fakes --------------------------------------------------------------------
 
 FIX="$TMP_ROOT/fixtures"
 mkdir -p "$FIX/image"
+export NODE_TOOLS_POLICY_CHECK="$FIX/check-policy"
+cat >"$NODE_TOOLS_POLICY_CHECK" <<'EOF'
+#!/bin/sh
+set -e
+policy=$(PATH="$NODE_TOOLS_TEST_PATH" "$REAL_PNPM" --dir "$(dirname "$1")" config get allowBuilds --json)
+"$REAL_NODE" - "$policy" <<'JS'
+const assert = require('node:assert/strict');
+const policy = JSON.parse(process.argv[2]);
+for (const [key, value] of Object.entries({ 'better-sqlite3': true, esbuild: true, edgedriver: false, geckodriver: false })) {
+  assert.equal(policy[key], value);
+}
+JS
+EOF
+chmod +x "$NODE_TOOLS_POLICY_CHECK"
 
 # A stand-in for nvm's install script: installs the fake nvm.sh into $NVM_DIR
 # (as the real one does, it needs the directory to exist) and records PROFILE.
@@ -120,7 +137,7 @@ nvm() {
       mkdir -p "\$bin"
       cp "$FIX/npm" "\$bin/npm"
       cp "$FIX/npx" "\$bin/npx"
-      printf '#!/bin/sh\necho $FAKE_NODE\n' >"\$bin/node"
+      printf '#!/bin/sh\nif [ "\$1" = --version ]; then echo $FAKE_NODE; else exec "%s" "\$@"; fi\n' "\$REAL_NODE" >"\$bin/node"
       chmod +x "\$bin/npm" "\$bin/npx" "\$bin/node"
       ;;
     "alias default")
@@ -228,10 +245,8 @@ case "$1 $2" in
     shift 2
     if [ "$command" = add ]; then
       [ -z "${PNPM_FAKE_FAIL-}" ] || { echo "ERR_PNPM_FETCH_404" >&2; exit 1; }
-      case "$(cat "$PNPM_HOME/global/pnpm-workspace.yaml" 2>/dev/null)" in
-        *"better-sqlite3: true"*"esbuild: true"*"edgedriver: false"*"geckodriver: false"*) ;;
-        *) echo "fake pnpm: no allowBuilds in $PNPM_HOME/global/pnpm-workspace.yaml" >&2; exit 1 ;;
-      esac
+      "$NODE_TOOLS_POLICY_CHECK" "$PNPM_HOME/global/pnpm-workspace.yaml" \
+        || { echo "fake pnpm: incorrect allowBuilds in $PNPM_HOME/global/pnpm-workspace.yaml" >&2; exit 1; }
     fi
     for package; do
       case "$package" in -*) continue ;; esac
@@ -266,6 +281,7 @@ echo "npx $*" >>"$NODE_TOOLS_LOG"
 shift 3
 source=$1
 shift
+[ "$source" != "${NPX_FAKE_FAIL_SOURCE-}" ] || { echo "npm ERR! network" >&2; exit 1; }
 skill= agent= yes= global=
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -282,6 +298,27 @@ done
 add() {
   mkdir -p "$HOME/.agents/skills/$1"
   echo "$2" >"$HOME/.agents/skills/$1/SKILL.md"
+  [ "$2" != pinned ] || [ -z "${NPX_FAKE_SKIP_PIN_LOCK-}" ] || return 0
+  node - "$1" "$source" <<'JS'
+const fs = require('node:fs');
+const path = require('node:path');
+const file = process.env.XDG_STATE_HOME
+  ? path.join(process.env.XDG_STATE_HOME, 'skills', '.skill-lock.json')
+  : path.join(process.env.HOME, '.agents', '.skill-lock.json');
+let lock = { version: 3, skills: {} };
+try { lock = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+if (!(lock.version >= 3) || !lock.skills) lock = { version: 3, skills: {} };
+const [name, input] = process.argv.slice(2);
+const pinned = input.startsWith('https://');
+const source = pinned ? 'mattpocock/skills' : input;
+lock.skills[name] = {
+  source, sourceType: 'github', sourceUrl: `https://github.com/${source}.git`,
+  ...(pinned ? { ref: input.split('/tree/')[1].split('/')[0] } : {}),
+  skillPath: `skills/engineering/${name}/SKILL.md`, skillFolderHash: 'fake-folder-hash',
+};
+fs.mkdirSync(path.dirname(file), { recursive: true });
+fs.writeFileSync(file, JSON.stringify(lock));
+JS
 }
 case "$source" in
   arc-mcp/arc-1) add explain-abap-code arc ;;
@@ -303,6 +340,7 @@ EOF
 chmod +x "$FIX/npm" "$FIX/npx" "$FIX/pnpm" "$FIX/cf" "$FIX"/fake-*
 # The devcontainer image's own Node.js tools, fakes of the nvm layout's.
 cp "$FIX/pnpm" "$FIX/npm" "$FIX/npx" "$FIX/cf" "$FIX/image/"
+ln -s "$REAL_NODE" "$FIX/image/node"
 
 # A stand-in for Claude Code's install script: like the real one, it puts the
 # launcher at ~/.local/bin/claude, pointing into the versions directory.
@@ -408,7 +446,9 @@ export PI_INSTALL_URL="file://$FIX/pi-install.sh"
 export COPILOT_INSTALL_URL="file://$FIX/copilot-install.sh"
 export CLAUDE_INSTALL_URL="file://$FIX/claude-install.sh"
 export ANTIGRAVITY_INSTALL_URL="file://$FIX/antigravity-install.sh"
-BASE_PATH="/usr/bin:/bin"
+mkdir -p "$FIX/common"
+cp "$FIX/cf" "$FIX/common/cf"
+BASE_PATH="$FIX/common:/usr/bin:/bin"
 WINDOWS_NPM="/mnt/c/Users/dev/AppData/Roaming/npm"
 
 # Runs tools/node-tools.sh $2 against scratch HOME $1 with PATH $3.
@@ -466,7 +506,7 @@ nvm install --lts --no-progress
 nvm alias default lts/*
 npm install -g pnpm
 $NODE_INSTALLS" ] || fail "workstation did not install nvm, Node.js LTS as default, pnpm, the pnpm globals, the skills, the npm globals, and cf-tools-local, in order: $(calls)"
-  [ "$("$home/.nvm/default/bin/node")" = "$FAKE_NODE" ] || fail "\$NVM_DIR/default is not nvm's default Node.js"
+  [ "$("$home/.nvm/default/bin/node" --version)" = "$FAKE_NODE" ] || fail "\$NVM_DIR/default is not nvm's default Node.js"
   # The npm globals are in nvm's prefix, which $NVM_DIR/default/bin (on PATH) shows, and yo finds them there.
   nvm_prefix="$home/.nvm/versions/node/$FAKE_NODE"
   [ "$("$home/.nvm/default/bin/mbt" --version)" = "Cloud MTA Build Tool version 9.9.9" ] || fail "mbt is not in nvm's default Node.js bin"
@@ -476,11 +516,7 @@ $NODE_INSTALLS" ] || fail "workstation did not install nvm, Node.js LTS as defau
   done
   [ -d "$nvm_prefix/lib/node_modules/@sap/generator-fiori" ] || fail "the generators are not under npm's global prefix"
   [ ! -e "$home/.local/share/pnpm/global/v11/h/node_modules/yo" ] || fail "yo was installed with pnpm"
-  [ "$(cat "$home/.local/share/pnpm/global/pnpm-workspace.yaml")" = "allowBuilds:
-  better-sqlite3: true
-  esbuild: true
-  edgedriver: false
-  geckodriver: false" ] || fail "pnpm's global pnpm-workspace.yaml is wrong: $(cat "$home/.local/share/pnpm/global/pnpm-workspace.yaml")"
+  "$NODE_TOOLS_POLICY_CHECK" "$home/.local/share/pnpm/global/pnpm-workspace.yaml" || fail "pnpm's global build policy is wrong"
   [ "$(cat "$home/.agents/skills/resolving-merge-conflicts/SKILL.md")" = pinned ] || fail "resolving-merge-conflicts is not the pinned copy"
   [ -f "$home/.agents/skills/find-skills/SKILL.md" ] || fail "find-skills is missing"
 
@@ -498,7 +534,7 @@ $NODE_INSTALLS" ] || fail "workstation did not install nvm, Node.js LTS as defau
   : >"$NODE_TOOLS_LOG"
   out=$(run_tools "$home" workstation "$BASE_PATH") || fail "node-tools re-run failed: $out"
   out="$out$(run_bash_tools "$home" "$BASE_PATH")" || fail "bash-tools re-run failed: $out"
-  [ -z "$(calls)" ] || fail "a re-run reinstalled something: $(calls)"
+  [ "$(calls)" = "$YO_SMOKE" ] || fail "a re-run reinstalled something or skipped the generator check: $(calls)"
   [ -z "$out" ] || fail "a re-run is not quiet: $out"
   pass "workstation: nvm (PROFILE=/dev/null), Node.js LTS as default, pnpm, the pnpm globals (allowBuilds first), the skills, the npm globals in nvm's prefix (yo lists every generator), cf-tools-local on amd64; then herdr, Pi, Copilot, Claude Code, and Antigravity; re-runs install and print nothing"
 }
@@ -523,7 +559,8 @@ $YO_SMOKE" ] \
   : >"$NODE_TOOLS_LOG"
   out=$(run_tools "$home" workstation "$BASE_PATH") || fail "node-tools after deleting a mattpocock skill failed: $out"
   [ "$(calls)" = "npx --yes skills add mattpocock/skills --agent universal --yes --global
-npx --yes skills add https://github.com/mattpocock/skills/tree/153fc1b93de6584562765cdce299324e1ff9e661/skills/engineering/resolving-merge-conflicts --agent universal --yes --global" ] \
+npx --yes skills add https://github.com/mattpocock/skills/tree/153fc1b93de6584562765cdce299324e1ff9e661/skills/engineering/resolving-merge-conflicts --agent universal --yes --global
+$YO_SMOKE" ] \
     || fail "mattpocock/skills was not followed by the pinned skill: $(calls)"
   [ "$(cat "$home/.agents/skills/resolving-merge-conflicts/SKILL.md")" = pinned ] || fail "the pinned copy lost to mattpocock/skills'"
   pass "a re-switch installs only the missing pnpm and npm globals and skills, and the pinned resolving-merge-conflicts always follows mattpocock/skills"
@@ -552,7 +589,7 @@ test_container_and_failures() {
   : >"$NODE_TOOLS_LOG"
   out=$(PNPM_HOME="$home/pnpm-home" run_tools "$home" container "$FIX/image:$BASE_PATH")
   out="$out$(PNPM_HOME="$home/pnpm-home" run_bash_tools "$home" "$FIX/image:$BASE_PATH")"
-  [ -z "$(calls)$out" ] || fail "a container re-run was not a quiet no-op: $(calls) $out"
+  [ "$(calls)" = "$YO_SMOKE" ] && [ -z "$out" ] || fail "a container re-run reinstalled tools, skipped the generator check, or warned: $(calls) $out"
 
   # NPM_CONFIG_PREFIX wins over ~/.npm-global.
   home="$TMP_ROOT/ct-prefix"
@@ -602,6 +639,12 @@ test_step_failures_do_not_block() {
   assert_contains "$out" "npm install -g mbt mta yo" "a failed npm install is not reported: $out"
   [ -d "$home/pnpm/global/v11/h/node_modules/eslint" ] && [ -f "$home/.agents/skills/find-skills/SKILL.md" ] \
     || fail "a failing npm install stopped the pnpm globals or the skills"
+  for tool in mbt mta yo; do
+    assert_contains "$out" "warning: $tool is not on PATH" "a failing npm install suppressed the $tool smoke warning: $out"
+  done
+  if [ -n "$AMD64" ]; then
+    assert_contains "$out" "warning: cf plugins does not list ServiceInfo" "a failing cf-tools-local install suppressed the plugin warning: $out"
+  fi
 
   # Failing skills: pnpm and npm globals are still installed.
   home="$TMP_ROOT/fail-skills"
@@ -641,12 +684,140 @@ test_smoke_checks_warn() {
   if [ -n "$AMD64" ]; then
     assert_contains "$out" "warning: cf plugins does not list ServiceInfo" "a missing ServiceInfo plugin is not a warning: $out"
   fi
-  # Everything was installed anyway, and the next run only checks mbt and mta.
   [ -x "$home/.npm-global/bin/yo" ] && [ -f "$home/.agents/skills/find-skills/SKILL.md" ] || fail "smoke warnings stopped the installs"
   : >"$NODE_TOOLS_LOG"
   out=$(PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") || fail "a re-run after smoke warnings failed: $out"
-  [ -z "$(calls)$out" ] || fail "a re-run after smoke warnings was not quiet: $(calls) $out"
-  pass "broken mbt, an unlisted generator, and a missing ServiceInfo plugin are warnings that do not stop any install"
+  [ "$(calls)" = "$YO_SMOKE" ] && [ -z "$out" ] || fail "a re-run after smoke warnings skipped the generator check or was not quiet: $(calls) $out"
+  if out=$(YO_FAKE_HIDE=@sap/fiori PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH"); then
+    fail "an existing but undiscoverable generator was accepted: $out"
+  fi
+  assert_contains "$out" "warning: yo --generators does not list @sap/fiori" "a re-switch suppressed the generator warning: $out"
+  mkdir -p "$home/image-no-cf"
+  cp "$FIX/image/npm" "$FIX/image/pnpm" "$FIX/image/npx" "$home/image-no-cf/"
+  ln -s "$REAL_NODE" "$home/image-no-cf/node"
+  if [ -n "$AMD64" ]; then
+    if out=$(PNPM_HOME="$home/pnpm" run_tools "$home" container "$home/image-no-cf:/usr/bin:/bin"); then
+      fail "a missing cf CLI was silently accepted: $out"
+    fi
+    assert_contains "$out" "ServiceInfo plugin could not be verified because cf is missing" "a missing cf CLI did not warn: $out"
+  fi
+  printf '#!/bin/sh\necho aarch64\n' >"$home/image-no-cf/uname"
+  chmod +x "$home/image-no-cf/uname"
+  out=$(PNPM_HOME="$home/pnpm" run_tools "$home" container "$home/image-no-cf:/usr/bin:/bin") || fail "an ARM re-switch tried to verify an amd64-only plugin: $out"
+  assert_not_contains "$out" "ServiceInfo" "an ARM re-switch checked the amd64-only plugin: $out"
+  rm -rf "$home/.npm-global/lib/node_modules/mta"
+  if out=$(NPM_FAKE_FAIL=1 YO_FAKE_HIDE=@sap/cap-project PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH"); then
+    fail "a failing install with a smoke warning succeeded: $out"
+  fi
+  assert_contains "$out" "warning: yo --generators does not list @sap/cap-project" "an npm failure suppressed an existing generator's smoke check: $out"
+  pass "smoke checks warn on every switch, including existing globals, failed installs, and a missing cf CLI"
+}
+
+test_pnpm_policy() {
+  local home="$TMP_ROOT/policy" file out shape setting
+  mkdir -p "$home/pnpm/global"
+  file="$home/pnpm/global/pnpm-workspace.yaml"
+  printf '%s\n' 'packages:' '  - "apps/*"' 'allowBuilds:' '  geckodriver: true' '  "esbuild": false # keep this note' '  custom-native: true' "  '@scope/native': false" '  better-sqlite3: false' 'linkWorkspacePackages: false' 'catalog:' '  foo: latest' >"$file"
+  out=$(PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") || fail "an existing block policy was not repaired: $out"
+  "$NODE_TOOLS_POLICY_CHECK" "$file" || fail "required policy values were not repaired"
+  PATH="$NODE_TOOLS_TEST_PATH" "$REAL_PNPM" --dir "$(dirname "$file")" config list --json | "$REAL_NODE" -e '
+const assert = require("node:assert/strict");
+let input = "";
+process.stdin.on("data", chunk => input += chunk);
+process.stdin.on("end", () => {
+  const config = JSON.parse(input);
+  assert.deepEqual(config.allowBuilds, { "better-sqlite3": true, esbuild: true, edgedriver: false, geckodriver: false, "custom-native": true, "@scope/native": false });
+  assert.deepEqual(config.packages, ["apps/*"]);
+  assert.equal(config.linkWorkspacePackages, false);
+  assert.deepEqual(config.catalog, { foo: "latest" });
+});' || fail "repair changed unrelated policy entries or top-level settings"
+
+  printf '%s\n' 'packages:' '  - "apps/*"' 'linkWorkspacePackages: false' >"$file"
+  rm -rf "$home/pnpm/global/v11/h/node_modules/eslint"
+  out=$(PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") || fail "a missing policy was not added: $out"
+  "$NODE_TOOLS_POLICY_CHECK" "$file" || fail "added policy has incorrect values"
+  setting=$(PATH="$NODE_TOOLS_TEST_PATH" "$REAL_PNPM" --dir "$(dirname "$file")" config get packages --json)
+  "$REAL_NODE" -e 'require("node:assert/strict").deepEqual(JSON.parse(process.argv[1]), ["apps/*"])' "$setting" || fail "adding a policy changed existing settings"
+
+  for shape in flow duplicate alias nested document indented; do
+    case "$shape" in
+      flow) printf '%s\n' 'allowBuilds: { esbuild: false }' >"$file" ;;
+      duplicate) printf '%s\n' 'allowBuilds:' '  esbuild: true' '  esbuild: false' >"$file" ;;
+      alias) printf '%s\n' 'allowBuilds:' '  esbuild: *build' >"$file" ;;
+      nested) printf '%s\n' 'allowBuilds:' '  esbuild:' '    enabled: true' >"$file" ;;
+      document) printf '%s\n' '---' 'allowBuilds:' '  esbuild: false' >"$file" ;;
+      indented) printf '%s\n' '  allowBuilds:' '    esbuild: false' >"$file" ;;
+    esac
+    cp "$file" "$home/original.yaml"
+    rm -rf "$home/pnpm/global/v11/h/node_modules/eslint"
+    : >"$NODE_TOOLS_LOG"
+    if out=$(PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH"); then
+      fail "unsafe $shape policy was accepted: $out"
+    fi
+    assert_contains "$out" "warning: cannot safely set allowBuilds" "unsafe $shape policy did not warn: $out"
+    cmp -s "$file" "$home/original.yaml" || fail "unsafe $shape policy was changed"
+    assert_not_contains "$(calls)" "pnpm add" "unsafe $shape policy allowed an install"
+    assert_contains "$(calls)" "$YO_SMOKE" "unsafe policy suppressed smoke checks"
+  done
+
+  printf '%s\n' 'allowBuilds: { geckodriver: false, esbuild: true, better-sqlite3: true, edgedriver: false }' >"$file"
+  HOME="$home" PNPM_HOME="$home/pnpm" PATH="$FIX/image:$home/pnpm/bin:$BASE_PATH" "$FIX/pnpm" add -g eslint \
+    || fail "the fake install guard rejected an equivalent flow-style policy"
+  printf '%s\n' 'allowBuilds:' '  # better-sqlite3: true' '  # esbuild: true' '  # edgedriver: false' '  # geckodriver: false' >"$file"
+  if HOME="$home" PNPM_HOME="$home/pnpm" PATH="$FIX/image:$home/pnpm/bin:$BASE_PATH" "$FIX/pnpm" add -g eslint >/dev/null 2>&1; then
+    fail "the fake install guard accepted commented-out policy entries"
+  fi
+  pass "pnpm policy repairs required booleans, preserves unrelated settings, and leaves unsafe shapes untouched; assertions consume YAML semantically"
+}
+
+test_skill_pin_retries() {
+  local home out source state entry field
+  local pin=https://github.com/mattpocock/skills/tree/153fc1b93de6584562765cdce299324e1ff9e661/skills/engineering/resolving-merge-conflicts
+  for source in vercel-labs/skills "$pin"; do
+    for state in default xdg; do
+      home="$TMP_ROOT/pin-${source##*/}-$state"
+      mkdir -p "$home"
+      if out=$(XDG_STATE_HOME=$([ "$state" = default ] || echo "$home/state") NPX_FAKE_FAIL_SOURCE="$source" PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH"); then
+        fail "an interrupted skills install succeeded: $out"
+      fi
+      [ "$(cat "$home/.agents/skills/resolving-merge-conflicts/SKILL.md")" = unpinned ] || fail "the interrupted install did not reproduce the unpinned skill"
+      : >"$NODE_TOOLS_LOG"
+      out=$(XDG_STATE_HOME=$([ "$state" = default ] || echo "$home/state") PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") || fail "a retry did not converge to the pin: $out"
+      assert_contains "$(calls)" "npx --yes skills add $pin" "a retry skipped the pin after $source failed"
+      [ "$(cat "$home/.agents/skills/resolving-merge-conflicts/SKILL.md")" = pinned ] || fail "a retry retained the unpinned skill"
+      : >"$NODE_TOOLS_LOG"
+      out=$(XDG_STATE_HOME=$([ "$state" = default ] || echo "$home/state") PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") || fail "a converged pin was not idempotent: $out"
+      [ "$(calls)" = "$YO_SMOKE" ] && [ -z "$out" ] || fail "a converged pin was reinstalled: $(calls) $out"
+    done
+  done
+
+  home="$TMP_ROOT/pin-skills-default"
+  for field in missing malformed ref source sourceType sourceUrl version; do
+    entry="$home/.agents/.skill-lock.json"
+    case "$field" in
+      missing) rm -f "$entry" ;;
+      malformed) echo '{' >"$entry" ;;
+      *) "$REAL_NODE" - "$entry" "$field" <<'JS'
+const fs = require('node:fs');
+const [file, field] = process.argv.slice(2);
+const lock = JSON.parse(fs.readFileSync(file, 'utf8'));
+if (field === 'version') lock.version = 2;
+else lock.skills['resolving-merge-conflicts'][field] = 'wrong';
+fs.writeFileSync(file, JSON.stringify(lock));
+JS
+      ;;
+    esac
+    : >"$NODE_TOOLS_LOG"
+    out=$(PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") || fail "invalid $field metadata was not repaired: $out"
+    assert_contains "$(calls)" "npx --yes skills add $pin" "invalid $field metadata bypassed the pin"
+  done
+  rm -f "$home/.agents/skills/resolving-merge-conflicts/SKILL.md"
+  out=$(PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") || fail "a missing pinned skill was not restored: $out"
+  if out=$(NPX_FAKE_SKIP_PIN_LOCK=1 PNPM_HOME="$TMP_ROOT/pin-no-lock/pnpm" run_tools "$TMP_ROOT/pin-no-lock" container "$FIX/image:$BASE_PATH"); then
+    fail "a pin install without matching lock metadata was accepted: $out"
+  fi
+  assert_contains "$out" "lock metadata does not identify the pinned source and revision" "a pin without metadata was not reported: $out"
+  pass "interrupted skill installs converge on retry; the pin requires its file and source/revision metadata, including XDG state"
 }
 
 test_bash_tools_failures() {
@@ -1029,6 +1200,9 @@ test_only_missing_is_installed
 test_container_and_failures
 test_step_failures_do_not_block
 test_smoke_checks_warn
+test_pnpm_policy
+test_skill_pin_retries
+[ "${1:-}" != node-tools ] || exit 0
 test_bash_tools_failures
 test_antigravity_scratch_home
 test_migrate_pnpm_copies

@@ -31,8 +31,7 @@
 # - agent skills for every agent (`npx --yes skills add ... --agent universal
 #   --yes --global`, which fills ~/.agents/skills): arc-mcp/arc-1,
 #   mattpocock/skills, vercel-labs/skills (find-skills only), and the
-#   mattpocock resolving-merge-conflicts skill at a pinned commit, right after
-#   mattpocock/skills so that its copy wins. --agent universal is required
+#   mattpocock resolving-merge-conflicts skill at a pinned commit. --agent universal is required
 #   (--yes alone targets 50+ agent config directories), and the CLI reads
 #   owner/repo@X as a skill name, so there is no @latest.
 #
@@ -50,8 +49,7 @@
 # marker skill is absent from ~/.agents/skills.
 #
 # Smoke checks warn, never block: mbt and mta print their version, `yo
-# --generators` (after installing generators, since it takes seconds) lists
-# every generator's namespace, and with @sap/cf-tools-local and a cf CLI
+# --generators` lists every generator's namespace, and on amd64
 # `cf plugins` lists ServiceInfo.
 # A failing step does not stop the others; the script then exits non-zero with
 # one message per failure, which the Home Manager activation turns into a
@@ -180,19 +178,56 @@ missing_from_list() {
   done
 }
 
-# pnpm's global directory gets a pnpm-workspace.yaml with allowBuilds for the
-# packages whose build scripts may run, before pnpm installs anything. Left
-# alone once it has an allowBuilds list (pnpm or the user may have added to it).
 write_pnpm_allow_builds() {
   local file=$1
   mkdir -p "$(dirname "$file")" || oops "cannot create $(dirname "$file")" || return 1
-  if [ -f "$file" ] && grep -q '^allowBuilds:' "$file"; then
-    return 0
-  fi
-  {
-    [ ! -s "$file" ] || echo
-    printf '%s\n' 'allowBuilds:' '  better-sqlite3: true' '  esbuild: true' '  edgedriver: false' '  geckodriver: false'
-  } >>"$file" || oops "cannot write $file" || return 1
+  node - "$file" <<'JS' || oops "warning: cannot safely set allowBuilds in $file; leaving it unchanged and skipping pnpm installs" || return 1
+const fs = require('node:fs');
+const file = process.argv[2];
+const policy = { 'better-sqlite3': true, esbuild: true, edgedriver: false, geckodriver: false };
+try {
+  const original = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+  const lines = original.split('\n');
+  if (lines.at(-1) === '') lines.pop();
+  const topKeys = new Set();
+  const buildKeys = new Set();
+  let start = -1, end = lines.length, inBuilds = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\s*(#.*)?$/.test(line)) continue;
+    if (!/^ /.test(line)) {
+      const top = line.match(/^([A-Za-z][A-Za-z0-9_-]*):(?:\s.*)?$/);
+      if (!top || topKeys.has(top[1])) throw new Error('unsupported mapping');
+      topKeys.add(top[1]);
+      if (inBuilds) { end = i; inBuilds = false; }
+      if (top[1] === 'allowBuilds') {
+        if (!/^allowBuilds:\s*(#.*)?$/.test(line)) throw new Error('unsupported allowBuilds');
+        start = i;
+        inBuilds = true;
+      }
+    } else if (topKeys.size === 0) {
+      throw new Error('unsupported indentation');
+    } else if (inBuilds) {
+      const entry = line.match(/^  (?:([A-Za-z0-9_][A-Za-z0-9_@./*-]*)|'([^']+)'|"([^"\\]+)"):\s*(true|false)(\s*(?:#.*)?)$/);
+      if (!entry) throw new Error('unsupported allowBuilds entry');
+      const key = entry[1] ?? entry[2] ?? entry[3];
+      if (buildKeys.has(key)) throw new Error('duplicate allowBuilds entry');
+      buildKeys.add(key);
+      if (Object.hasOwn(policy, key)) {
+        lines[i] = line.slice(0, line.indexOf(':') + 1) + ' ' + policy[key] + entry[5];
+      }
+    }
+  }
+  const missing = Object.entries(policy).filter(([key]) => !buildKeys.has(key))
+    .map(([key, value]) => `  ${key}: ${value}`);
+  if (start === -1) lines.push('allowBuilds:', ...missing);
+  else lines.splice(end, 0, ...missing);
+  const updated = lines.join('\n') + '\n';
+  if (updated !== original) fs.writeFileSync(file, updated);
+} catch {
+  process.exitCode = 1;
+}
+JS
 }
 
 ensure_pnpm_globals() {
@@ -207,8 +242,7 @@ ensure_pnpm_globals() {
 }
 
 # Installs the npm globals "$@" that are missing, with install scripts
-# allowed only for the packages in $ALLOW_SCRIPTS. Sets INSTALLED to yes
-# when it installed anything.
+# allowed only for the packages in $ALLOW_SCRIPTS.
 npm_install_missing() {
   local root names=() spec
   root=$(npm root -g) || oops "npm root -g failed" || return 1
@@ -219,7 +253,6 @@ npm_install_missing() {
   say "npm install -g ${names[*]}"
   npm install -g "--allow-scripts=$ALLOW_SCRIPTS" "${names[@]}" >/dev/null \
     || oops "npm install -g ${names[*]} failed (offline?)" || return 1
-  INSTALLED=yes
 }
 
 ensure_npm_globals() {
@@ -246,27 +279,44 @@ skills_add() {
     || oops "npx skills add $source failed (offline?)" || return 1
 }
 
+pinned_merge_conflicts_present() {
+  [ -f "$SKILLS_DIR/resolving-merge-conflicts/SKILL.md" ] || return 1
+  node - "$MATTPOCOCK_RESOLVING_MERGE_CONFLICTS" <<'JS'
+const fs = require('node:fs');
+const path = require('node:path');
+const file = process.env.XDG_STATE_HOME
+  ? path.join(process.env.XDG_STATE_HOME, 'skills', '.skill-lock.json')
+  : path.join(process.env.HOME, '.agents', '.skill-lock.json');
+try {
+  const lock = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const entry = lock.skills?.['resolving-merge-conflicts'];
+  const [repo, revisionPath] = process.argv[2].split('/tree/');
+  process.exitCode = lock.version >= 3 && entry?.source === 'mattpocock/skills'
+    && entry.sourceType === 'github' && entry.sourceUrl === `${repo}.git`
+    && entry.ref === revisionPath.split('/')[0] ? 0 : 1;
+} catch {
+  process.exitCode = 1;
+}
+JS
+}
+
 ensure_skills() {
-  local merge_conflicts=
   command -v npx >/dev/null 2>&1 || oops "npx not found on PATH; cannot install the agent skills" || return 1
   [ -f "$SKILLS_DIR/explain-abap-code/SKILL.md" ] || skills_add arc-mcp/arc-1 || return 1
   if [ ! -f "$SKILLS_DIR/tdd/SKILL.md" ]; then
     skills_add mattpocock/skills || return 1
-    merge_conflicts=yes
   fi
   [ -f "$SKILLS_DIR/find-skills/SKILL.md" ] || skills_add vercel-labs/skills --skill find-skills || return 1
-  if [ -n "$merge_conflicts" ] || [ ! -f "$SKILLS_DIR/resolving-merge-conflicts/SKILL.md" ]; then
-    skills_add "$MATTPOCOCK_RESOLVING_MERGE_CONFLICTS" || return 1
-  fi
+  pinned_merge_conflicts_present || skills_add "$MATTPOCOCK_RESOLVING_MERGE_CONFLICTS" || return 1
   local skill
   for skill in find-skills resolving-merge-conflicts; do
     [ -f "$SKILLS_DIR/$skill/SKILL.md" ] || oops "$SKILLS_DIR/$skill/SKILL.md is missing after the skills install" || return 1
   done
+  pinned_merge_conflicts_present || oops "resolving-merge-conflicts lock metadata does not identify the pinned source and revision" || return 1
 }
 
 smoke_checks() {
   local out ns
-  INSTALLED=${1:-}
   if command -v mbt >/dev/null 2>&1; then
     out=$(mbt --version 2>&1 </dev/null || true)
     case "$out" in *"Cloud MTA Build Tool version"*) ;; *) warn "mbt --version does not say 'Cloud MTA Build Tool version': $out" ;; esac
@@ -279,25 +329,28 @@ smoke_checks() {
   else
     warn "mta is not on PATH"
   fi
-  # yo takes seconds to list generators, so only after installing some.
-  if [ -n "$INSTALLED" ]; then
-    if command -v yo >/dev/null 2>&1; then
-      out=$(yo --generators --no-insight 2>&1 </dev/null || true)
-      for ns in "${YO_NAMESPACES[@]}"; do
-        case "$out" in *"$ns"*) ;; *) warn "yo --generators does not list $ns (yo only finds generators under npm's global prefix $(npm prefix -g))" ;; esac
-      done
-    else
-      warn "yo is not on PATH"
-    fi
+  if command -v yo >/dev/null 2>&1; then
+    out=$(yo --generators --no-insight 2>&1 </dev/null || true)
+    for ns in "${YO_NAMESPACES[@]}"; do
+      case "$out" in *"$ns"*) ;; *) warn "yo --generators does not list $ns (yo only finds generators under npm's global prefix $(npm prefix -g))" ;; esac
+    done
+  else
+    warn "yo is not on PATH"
   fi
-  if command -v cf >/dev/null 2>&1 && [ -f "$(npm root -g)/@sap/cf-tools-local/package.json" ]; then
-    out=$(cf plugins 2>&1 </dev/null || true)
-    case "$out" in *ServiceInfo*) ;; *) warn "cf plugins does not list ServiceInfo" ;; esac
-  fi
+  case "$(uname -m)" in
+    x86_64 | amd64)
+      if command -v cf >/dev/null 2>&1; then
+        out=$(cf plugins 2>&1 </dev/null || true)
+        case "$out" in *ServiceInfo*) ;; *) warn "cf plugins does not list ServiceInfo" ;; esac
+      else
+        warn "ServiceInfo plugin could not be verified because cf is missing"
+      fi
+      ;;
+  esac
 }
 
 main() {
-  local installed npm_prefix
+  local npm_prefix
   case "${1:-}" in
     workstation | container) ;;
     *)
@@ -325,18 +378,11 @@ main() {
   # bin is on PATH for the smoke checks and the cf plugin check.
   npm_prefix=$(npm prefix -g) || die "npm prefix -g failed"
   export PATH="$npm_prefix/bin:$PNPM_HOME/bin:$PNPM_HOME:$PATH"
-  INSTALLED=
   step ensure_pnpm_globals
   step ensure_skills
   step ensure_npm_globals
-  installed=$INSTALLED
   step ensure_cf_tools_local
-  # Nothing to check where the npm globals failed to install, and that is
-  # reported already.
-  case " ${problems[*]-} " in
-    *" ensure_npm_globals "*) ;;
-    *) smoke_checks "$installed" ;;
-  esac
+  smoke_checks
   [ "${#problems[@]}" -eq 0 ] || {
     printf 'node-tools: %s did not complete (see above)\n' "$(IFS=,; echo "${problems[*]//ensure_/}")" >&2
     return 1
