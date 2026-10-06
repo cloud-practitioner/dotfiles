@@ -181,7 +181,7 @@ cat >"$FIX/npm" <<EOF
 #!/bin/sh
 prefix=\${NPM_CONFIG_PREFIX:-\$(cd "\$(dirname "\$0")/.." && pwd)}
 case "\$1 \$2" in
-  "prefix -g") echo "\$prefix" ;;
+  "prefix -g") [ -z "\${NPM_FAKE_PREFIX_FAIL-}" ] || exit 1; echo "\$prefix" ;;
   "root -g") echo "\$prefix/lib/node_modules" ;;
   "install -g")
     echo "npm \$*" >>"\$NODE_TOOLS_LOG"
@@ -450,7 +450,7 @@ for rc in .zshrc .bashrc .profile; do
 done
 EOF
 
-# A fake arc1-cli. Its directory holds `mode` (deny, allow, fail, or hang) and
+# A fake arc1-cli. Its directory holds `mode` and
 # the `calls` log. In deny mode it refuses SAPTransport release only when
 # SAP_DENY_ACTIONS lists it, as arc-1 does.
 mkdir -p "$FIX/arc1"
@@ -463,7 +463,8 @@ empty=yes
 [ -z "$(ls -A)" ] || empty=no
 echo "$* cwd=$PWD env_file=$env_file url=${SAP_URL-unset} user=${SAP_USER-unset} password=${SAP_PASSWORD-unset} writes=${SAP_ALLOW_TRANSPORT_WRITES-unset} deny=${SAP_DENY_ACTIONS-unset} leak=${ARC1_TEST_LEAK-unset} empty=$empty all_writes=${SAP_ALLOW_WRITES-unset} packages=${SAP_ALLOWED_PACKAGES-unset}" >>"$here/calls"
 [ "$1" = call ] || { echo "fake arc1-cli: unexpected: $*" >&2; exit 1; }
-case "$(cat "$here/mode")" in
+mode=$(cat "$here/mode")
+case "$mode" in
   deny)
     case "${SAP_DENY_ACTIONS-}" in
       *SAPTransport.release*) echo "WARN: [safety_blocked] SAPTransport.release"; echo "Action 'SAPTransport.release' is denied by server policy (SAP_DENY_ACTIONS)."; exit 1 ;;
@@ -472,6 +473,10 @@ case "$(cat "$here/mode")" in
   allow) echo "released POLICYCHECK" ;;
   fail) echo "Unknown action 'SAPTransport.release' in SAP_DENY_ACTIONS" >&2; exit 1 ;;
   hang) exec sleep 30 ;;
+  deny-hang | deny-kill)
+    [ "$mode" != deny-kill ] || trap '' TERM
+    echo "Action 'SAPTransport.release' is denied by server policy (SAP_DENY_ACTIONS)."
+    exec sleep 30 ;;
 esac
 EOF
 chmod +x "$FIX/arc1/arc1-cli"
@@ -647,7 +652,7 @@ test_container_and_failures() {
     || fail "container with NPM_CONFIG_PREFIX failed: $out"
   [ -x "$home/custom/bin/yo" ] && [ ! -e "$home/.npm-global" ] || fail "container ignored NPM_CONFIG_PREFIX"
 
-  # No pnpm: node-tools stops with one clear message, nothing is installed,
+  # No pnpm: node-tools stops with clear warnings, nothing is installed,
   # and bash-tools still installs all five.
   home="$TMP_ROOT/ct-nopnpm"
   mkdir -p "$home"
@@ -656,6 +661,7 @@ test_container_and_failures() {
     fail "container without pnpm succeeded: $out"
   fi
   assert_contains "$out" "pnpm not found on PATH" "missing pnpm is not reported clearly: $out"
+  assert_contains "$out" "deny list is unproven because the policy check did not run" "missing pnpm hid the unproven FAB policy: $out"
   [ -z "$(calls)" ] || fail "node-tools installed something without pnpm: $(calls)"
   out=$(run_bash_tools "$home" "$BASE_PATH") || fail "bash-tools without pnpm failed: $out"
   [ "$(calls)" = "$(bash_installs "$home")" ] || fail "bash-tools without pnpm did not install the five CLIs: $(calls)"
@@ -664,6 +670,7 @@ test_container_and_failures() {
     fail "workstation without the nvm install script succeeded: $out"
   fi
   assert_contains "$out" "cannot install nvm" "a failed nvm download is not reported: $out"
+  assert_contains "$out" "deny list is unproven because the policy check did not run" "a failed nvm download hid the unproven FAB policy: $out"
   pass "container: the image's Node.js and pnpm, npm globals in ~/.npm-global (or \$NPM_CONFIG_PREFIX) where yo finds them, no nvm; without pnpm node-tools fails clearly and bash-tools still installs everything"
 }
 
@@ -776,7 +783,7 @@ test_arc1_policy_check() {
   }
   PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH" >/dev/null || fail "arc1 check setup failed"
 
-  for mode in deny allow fail hang; do
+  for mode in deny allow fail hang deny-hang deny-kill; do
     : >"$log"
     : >"$FIX/arc1-timeout/calls"
     echo "$mode" >"$FIX/arc1/mode"
@@ -788,6 +795,9 @@ test_arc1_policy_check() {
       [ "$mode" != deny ] || fail "a denied release warned or failed the run: $out"
       assert_contains "$out" "$warning" "an undenied release ($mode) did not warn about the FAB write lane: $out"
       assert_contains "$out" "smoke_checks did not complete" "an undenied release ($mode) was not reported: $out"
+      case "$mode" in
+        hang | deny-hang | deny-kill) assert_contains "$out" "arc1-cli policy check timed out" "a timeout ($mode) was not identified: $out" ;;
+      esac
     fi
     [ $((SECONDS - start)) -lt 20 ] || fail "a hung arc1-cli stalled the check"
     [ "$(wc -l <"$log")" -eq 1 ] || fail "the policy check did not make exactly one ARC-1 invocation: $(cat "$log")"
@@ -818,7 +828,28 @@ test_arc1_policy_check() {
       setup) assert_contains "$out" "cannot create a temp directory" "scratch setup failure was not identified: $out" ;;
     esac
   done
-  pass "the arc-1 policy check is silent only for denial and otherwise warns, bounded, with every invocation isolated"
+  mkdir -p "$FIX/arc1-no-npm"
+  ln -s "$(command -v bash)" "$FIX/arc1-no-npm/bash"
+  cp "$FIX/pnpm" "$FIX/arc1-no-npm/pnpm"
+  for mode in no-pnpm no-npm prefix workstation; do
+    : >"$log"
+    case "$mode" in
+      no-pnpm) out=$(run_tools "$home" container "$BASE_PATH") ;;
+      no-npm) out=$(run_tools "$home" container "$FIX/arc1-no-npm") ;;
+      prefix) out=$(NPM_FAKE_PREFIX_FAIL=1 PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") ;;
+      workstation) out=$(NVM_INSTALL_URL="file://$TMP_ROOT/missing.sh" run_tools "$TMP_ROOT/arc1-workstation" workstation "$BASE_PATH") ;;
+    esac && fail "a fatal prerequisite failure ($mode) was accepted: $out"
+    assert_contains "$out" "$warning" "a fatal prerequisite failure ($mode) did not warn about the FAB write lane: $out"
+    assert_contains "$out" "because the policy check did not run" "a fatal prerequisite failure ($mode) hid the skipped policy check: $out"
+    case "$mode" in
+      no-pnpm) assert_contains "$out" "pnpm not found on PATH" "the missing pnpm path was not exercised: $out" ;;
+      no-npm) assert_contains "$out" "npm not found on PATH" "the missing npm path was not exercised: $out" ;;
+      prefix) assert_contains "$out" "npm prefix -g failed" "the failed prefix path was not exercised: $out" ;;
+      workstation) assert_contains "$out" "cannot install nvm" "the workstation setup failure was not exercised: $out" ;;
+    esac
+    [ ! -s "$log" ] || fail "a fatal prerequisite failure ($mode) invoked arc1-cli: $(cat "$log")"
+  done
+  pass "the arc-1 policy check is silent only for completed denial and warns on timeouts and prerequisite failures"
 }
 
 test_pnpm_policy() {
@@ -1184,6 +1215,7 @@ test_activation() {
   out=$(PNPM_HOME="$home/pnpm" run_activation "$CT" "$home" "$BASE_PATH" nodeTools) \
     || fail "$CT: activation without pnpm failed the switch: $out"
   assert_contains "$out" "pnpm not found on PATH" "$CT: activation hides why it failed: $out"
+  assert_contains "$out" "the FAB write lane is unsafe with this ARC-1 install: deny list is unproven because the policy check did not run" "$CT: activation hid the unproven FAB policy: $out"
   assert_contains "$out" "WARN: tools/node-tools.sh failed" "$CT: activation does not warn: $out"
   assert_contains "$out" "switch continues" "$CT: activation stopped the switch: $out"
   out=$(PNPM_HOME="$home/pnpm" HERDR_INSTALL_URL="file://$TMP_ROOT/missing.sh" run_activation "$CT" "$home" "$BASE_PATH" bashTools) \
@@ -1302,11 +1334,6 @@ test_shell_path() {
   done
   pass "in both profiles every zsh and a bash login shell, fresh or from an environment that already sourced the session variables, run herdr, claude, pi, copilot, and agy from ~/.local/bin, with pnpm's global bins, right before ~/.nix-profile/bin and ahead of its leftover herdr and of system and Windows copies, once each; the workstation adds nvm's default node, npm, and pnpm there and the container ~/.npm-global/bin, and its interactive zsh loads nvm; the interactive zsh loads herdr's completions"
 }
-
-if [ "${1:-}" = arc1-policy ]; then
-  test_arc1_policy_check
-  exit 0
-fi
 
 test_workstation_fresh_then_quiet
 test_only_missing_is_installed

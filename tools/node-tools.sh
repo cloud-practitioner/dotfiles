@@ -84,6 +84,7 @@ say() {
 
 die() {
   printf 'node-tools: %s\n' "$*" >&2
+  warn "the FAB write lane is unsafe with this ARC-1 install: deny list is unproven because the policy check did not run"
   exit 1
 }
 
@@ -324,7 +325,7 @@ ensure_skills() {
 # (SAP_DENY_ACTIONS)." Anything else warns: a non-denial, a CLI error, a
 # timeout, or an action name a future arc-1 rejects at start (it fails fast).
 arc1_policy_check() {
-  local dir out var keep=()
+  local dir out var status=0 keep=()
   local unsafe="the FAB write lane is unsafe with this ARC-1 install: deny list is unproven"
   command -v arc1-cli >/dev/null 2>&1 || { warn "$unsafe: arc1-cli is not on PATH"; return 0; }
   dir=$(mktemp -d) || { warn "$unsafe: cannot create a temp directory for the arc-1 policy check"; return 0; }
@@ -337,9 +338,10 @@ arc1_policy_check() {
     SAP_ALLOW_WRITES=true SAP_ALLOW_TRANSPORT_WRITES=true \
     SAP_ALLOWED_PACKAGES='/IQX/FAB*,/IQX/COMMON,/IQX/ONELIST_*' \
     SAP_DENY_ACTIONS='SAPTransport.release,SAPTransport.release_recursive,SAPTransport.delete,SAPTransport.reassign,SAPTransport.remove_object' \
-    arc1-cli call SAPTransport --json '{"action":"release","transport":"POLICYCHECK"}' 2>&1 </dev/null || true)
+    arc1-cli call SAPTransport --json '{"action":"release","transport":"POLICYCHECK"}' 2>&1 </dev/null) || status=$?
   rm -rf "$dir"
-  case "$out" in
+  case "$status:$out" in
+    124:* | 137:*) warn "$unsafe: arc1-cli policy check timed out" ;;
     *"denied by server policy (SAP_DENY_ACTIONS)"*) ;;
     *) warn "$unsafe: arc1-cli did not answer 'denied by server policy (SAP_DENY_ACTIONS)' for SAPTransport release: $(tail -n 1 <<<"$out")" ;;
   esac
