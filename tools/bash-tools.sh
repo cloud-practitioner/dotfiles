@@ -12,8 +12,8 @@
 # All are unpinned, so their own updaters keep them current. Each launcher
 # ends up in ~/.local/bin, which home.nix puts first on PATH, and must answer
 # `--version` after it is installed (herdr, pi, copilot, claude, and agy for
-# Antigravity). The installers run without a controlling terminal (setsid)
-# where they could prompt, so they never prompt or edit a shell rc file.
+# Antigravity). Pi, Copilot, and Antigravity run without a controlling terminal
+# (setsid) to prevent prompts; Antigravity's rc-file isolation is described below.
 #
 # herdr's installer puts its static release binary, checked against the
 # SHA-256 in herdr's release manifest, at $HERDR_INSTALL_DIR/herdr, here

@@ -42,11 +42,8 @@
 # default Node.js has its own prefix, so the next switch installs the npm
 # globals into it.
 #
-# Convention, as for the agent CLIs: install what is missing, never reinstall
-# or update what is there, so a re-switch is cheap and prints nothing; delete a
-# tool, or switch with the tool's own updater, to refresh it. Missing is: a
-# package absent from pnpm's or npm's global list, or a skill group whose
-# marker skill is absent from ~/.agents/skills.
+# For presence and pin checks, re-switch behavior, and refresh guidance, see
+# README.md's "Upstream CLI tools" section.
 #
 # Smoke checks warn, never block: mbt and mta print their version, `yo
 # --generators` lists every generator's namespace, and on amd64

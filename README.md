@@ -28,7 +28,7 @@ Running the switch builds:
 - System settings (dark mode, key repeat, dock, Finder, trackpad)
 - Homebrew apps (casks and CLI tools)
 - Nix user packages (ripgrep, fd, fzf, jq, bun, lazygit, Neovim, Hack Nerd Font)
-- On Linux, the whole toolchain installed unpinned at switch time: herdr, Claude Code, Pi, the GitHub Copilot CLI, and Antigravity from their own installers, plus the npm and pnpm global tools (UI5, CAP, MTA, Yeoman generators, ...) and agent skills, on the Node.js that the WSL2 workstation gets from nvm (see [Upstream CLI tools](#upstream-cli-tools))
+- On Linux, a shared switch-time toolchain of agent CLIs, npm and pnpm global tools (UI5, CAP, MTA, Yeoman generators, ...), and agent skills - see [Upstream CLI tools](#upstream-cli-tools)
 - Shell (zsh, aliases, starship prompt)
 - Editor (Neovim config with the rose-pine moon theme)
 - Terminal (WezTerm config with the rose-pine moon theme and dimmed unfocused windows)
@@ -68,7 +68,7 @@ Change the host label or CPU architecture if needed, and read the Homebrew clean
 3. Checks the `user` configured in `flake.nix` against your actual username, and offers to fix it for you if they differ.
 4. Runs the first switch.
    On macOS it fetches the `darwin-rebuild` tool from the nix-darwin 26.05 release branch, then applies this repo's locked flake config.
-   On Linux it runs the first `home-manager switch` instead (see [Linux](#linux)), which also installs herdr, Claude Code, Pi, the Copilot CLI, Antigravity, and the npm and pnpm global tools, and on the WSL2 workstation nvm, Node.js LTS, and pnpm (see [Upstream CLI tools](#upstream-cli-tools)).
+   On Linux it runs the first `home-manager switch` instead (see [Linux](#linux)), including the toolchain setup described in [Upstream CLI tools](#upstream-cli-tools).
 
 After that, `darwin-rebuild` exists and you're on the normal workflow below.
 
@@ -104,7 +104,7 @@ The same two scripts work - they detect the OS with `uname` and branch automatic
 
 ```sh
 ./bootstrap.sh   # installs Determinate Nix, then runs the first home-manager switch
-./rebuild.sh     # re-applies after changes; every switch also installs missing agent CLIs
+./rebuild.sh     # re-applies after changes, including missing toolchain installs
 ```
 
 `bootstrap.sh`, Linux `rebuild.sh`, and the container-only `hm-update` helper all run the Home Manager CLI at the revision pinned in `flake.lock`.
@@ -131,7 +131,7 @@ What you get on Linux:
 
 - Nix user packages: ripgrep, fd, fzf, jq, bun, lazygit, Neovim, Hack Nerd Font.
 - WezTerm from nixpkgs, the Linux equivalent of its macOS cask.
-- The toolchain, unpinned, in both Linux profiles: herdr, Claude Code, Pi, the GitHub Copilot CLI, and Antigravity from their own installers, the npm and pnpm global tools and agent skills; on the WSL2 workstation, nvm with Node.js LTS and pnpm under them - see [Upstream CLI tools](#upstream-cli-tools).
+- Shared toolchain installation in both Linux profiles - see [Upstream CLI tools](#upstream-cli-tools).
 - The same symlinked shell (zsh + starship), Neovim, WezTerm, and agent configs as macOS.
 - Git identity by remote URL and SSH client config, both rendered from your own `~/.config/dotfiles/identity.env`, and an `ssh-agent` systemd user service on the workstation profile - see [Git identity](#git-identity) and [SSH](#ssh-workstation-profile).
 - A `container` profile that reuses the same shell and tools inside a devcontainer - see [Devcontainers](#devcontainers).
@@ -140,30 +140,23 @@ Notes:
 
 - **Distro-agnostic**: works on any Linux distro (and WSL) once Nix is installed. home-manager is user-level and never touches apt/dnf/pacman.
 - **Login shell**: home-manager can't change your login shell. To use zsh, run once `chsh -s "$(command -v zsh)"`, then open a new terminal. `bootstrap.sh` prints this reminder.
-- **herdr and Claude Code** come from Homebrew on macOS (`configuration.nix`); Pi and the Copilot CLI are not installed there, and none of the Node.js setup below applies.
+- **herdr and Claude Code** come from Homebrew on macOS (`configuration.nix`); Pi, the Copilot CLI, and Antigravity are not installed there, and none of the Node.js setup below applies.
 - Applying is per-user, so there's no `sudo` on Linux.
 - **WSL2 + systemd**: the `ssh-agent` service is a systemd *user* service, so WSL2 needs systemd enabled. Add `[boot]` / `systemd=true` to `/etc/wsl.conf`, then `wsl --shutdown` and reopen; otherwise the agent never starts and `SSH_AUTH_SOCK` stays empty. The Determinate Nix daemon needs it too, so `bootstrap.sh` refuses to run on WSL without it.
 
 ### Upstream CLI tools
 
-Home Manager installs the toolchain on Linux, in both profiles (workstation and container), instead of nixpkgs builds and instead of the devcontainer image.
-Everything is unpinned: each tool floats to its latest release, and the install lists below are the only list (`tools/node-tools.sh` and `tools/bash-tools.sh`).
+Home Manager owns toolchain installation on Linux, in both profiles (workstation and container), outside the Nix store; the devcontainer image overlap is described below.
+The agent CLIs and npm/pnpm global tools are unpinned: missing tools install at the latest release, not as Nix derivations. The `resolving-merge-conflicts` skill is deliberately pinned, as described below.
+The authoritative install lists live in [`tools/node-tools.sh`](tools/node-tools.sh) and [`tools/bash-tools.sh`](tools/bash-tools.sh).
 Every switch runs both scripts as `home.activation` steps, `nodeTools` first and `bashTools` after it, since Pi's installer needs Node.js.
 A failing step prints a warning and the switch still completes; the next switch retries.
-Every step installs what is missing and prints nothing when everything is there, so a re-switch is cheap; it never updates or reinstalls what is present (the tools' own updaters, below, or deleting a tool, do that).
+Install steps skip existing CLIs and global packages, so a healthy re-switch is quiet and cheap; switches do not upgrade them (use the tools' own updaters, below, or remove a tool before switching to refresh it). Skill presence and pin checks are described below.
 
-**herdr, Claude Code, Pi, the GitHub Copilot CLI, and Antigravity** (`tools/bash-tools.sh`) install with exactly:
-
-```sh
-curl -fsSL https://herdr.dev/install.sh | HERDR_INSTALL_DIR=~/.local/bin sh
-curl -fsSL https://pi.dev/install.sh | sh
-curl -fsSL https://gh.io/copilot-install | bash
-curl -fsSL https://claude.ai/install.sh | bash
-curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir ~/.local/bin   # with a scratch HOME, below
-```
+**herdr, Claude Code, Pi, the GitHub Copilot CLI, and Antigravity** come from the vendor installers invoked by `tools/bash-tools.sh`.
 
 Each installer puts its launcher in `~/.local/bin` (`herdr`, `pi`, `copilot`, `claude`, `agy`), and each CLI must answer `--version` after it is installed.
-The Pi, Copilot, and Antigravity installers run without a controlling terminal, so they never prompt or edit `~/.zshrc`, `~/.bashrc`, or `~/.profile`.
+The Pi and Copilot installers run without a controlling terminal, so they never prompt or edit `~/.zshrc`, `~/.bashrc`, or `~/.profile`. Antigravity also runs without a controlling terminal; its rc-file isolation is described below.
 
 - **herdr**'s installer (its [documented install](https://herdr.dev/docs/install/)) puts its static release binary, checked against the SHA-256 in `https://herdr.dev/latest.json`, at `~/.local/bin/herdr`.
   It needs no Node.js.
@@ -179,32 +172,14 @@ The Pi, Copilot, and Antigravity installers run without a controlling terminal, 
   So a switch runs it with a scratch `HOME` and `--dir ~/.local/bin`: the binary lands in the real `~/.local/bin`, the rc files that the installer edits are the scratch home's, and that directory is removed afterwards.
 
 Their own updaters (`herdr update`, `claude update`, `pi update`, `copilot update`, and `agy`'s) keep them current.
-`bash tests/node-tools.test.sh` covers both scripts against local fakes, with Node.js and pnpm on `PATH` for semantic checks of generated pnpm configuration.
 
-**The pnpm and npm global tools and the agent skills** (`tools/node-tools.sh`) install on the profile's Node.js (below), as the `agentic-devcontainer` Dockerfile used to:
+**The pnpm and npm global tools and the agent skills** (`tools/node-tools.sh`) install on the profile's Node.js (below). See its `PNPM_PACKAGES` and `NPM_PACKAGES` arrays for the package lists and `ensure_skills` for the skill sources and pinned revision, migrated from the `agentic-devcontainer` Dockerfile.
+Yeoman and its generators must use npm, not pnpm: `yo` only discovers generators under npm's global prefix. The npm globals use `--allow-scripts=mbt,mta`; on amd64, `@sap/cf-tools-local` is installed separately with `--allow-scripts=@sap/cf-tools-local`.
 
-```sh
-# pnpm globals; pnpm's global directory first gets a pnpm-workspace.yaml with
-# allowBuilds (better-sqlite3 true, esbuild true, edgedriver false, geckodriver false)
-pnpm add -g arc-1@latest npm-run-all eslint npm-check-updates @ui5/cli @sap/cds-dk @sap/cf-tools \
-  @sap/ux-ui5-tooling @sap/html5-app-deployer odata-openapi @wdio/cli
-# npm globals; yo only discovers generators under npm's global prefix
-npm install -g --allow-scripts=mbt,mta mbt mta yo generator-easy-ui5 @sap-ux/generator-adp \
-  @sap/generator-adaptation-project @sap/generator-add-hdb-module @sap/generator-aicore \
-  @sap/generator-base-mta-module @sap/generator-cap-project @sap/generator-fiori
-# amd64 only
-npm install -g --allow-scripts=@sap/cf-tools-local @sap/cf-tools-local
-# agent skills, for every agent (~/.agents/skills)
-npx --yes skills add arc-mcp/arc-1 --agent universal --yes --global
-npx --yes skills add mattpocock/skills --agent universal --yes --global
-npx --yes skills add vercel-labs/skills --skill find-skills --agent universal --yes --global
-npx --yes skills add https://github.com/mattpocock/skills/tree/153fc1b93de6584562765cdce299324e1ff9e661/skills/engineering/resolving-merge-conflicts --agent universal --yes --global
-```
-
-A tool counts as missing when pnpm's or npm's global list lacks its package, or when the marker skill of a skills source (`explain-abap-code`, `tdd`, `find-skills`) is not in `~/.agents/skills`. The pinned `resolving-merge-conflicts` needs both its `SKILL.md` and the pinned source/revision in the skills CLI's lock metadata (`~/.agents/.skill-lock.json`, or `$XDG_STATE_HOME/skills/.skill-lock.json` when set); a bulk install or an interrupted switch cannot make an unpinned copy satisfy that check, and the next switch retries the pin.
+A pnpm package counts as missing when pnpm's global list lacks it; an npm package counts as missing when its `package.json` is absent under `npm root -g`. A skills source is installed when its marker skill's `SKILL.md` (`explain-abap-code`, `tdd`, `find-skills`) is absent from `~/.agents/skills`. The pinned `resolving-merge-conflicts` needs both its `SKILL.md` and the pinned source/revision in the skills CLI's lock metadata (`~/.agents/.skill-lock.json`, or `$XDG_STATE_HOME/skills/.skill-lock.json` when set); a bulk install or an interrupted switch cannot make an unpinned copy satisfy that check, and the next switch retries the pin.
 The `skills` CLI reads `owner/repo@X` as a skill name, so there is no `@latest` on them, and `--agent universal` is required (`--yes` alone targets 50+ agent config directories).
 Afterwards the script checks that `find-skills` and `resolving-merge-conflicts` are there and that the latter's lock metadata identifies the pin.
-Before a pnpm global install, the script sets the four declared `allowBuilds` booleans in `pnpm-workspace.yaml`, preserving other entries and top-level settings in the simple block mapping that pnpm writes. An unsupported shape (such as a flow-style `allowBuilds` mapping) is left unchanged with a warning, and that pnpm install is skipped; convert it to a simple block mapping and switch again.
+Before a pnpm global install, the script sets `allowBuilds` in the global directory's `pnpm-workspace.yaml`: `better-sqlite3: true`, `esbuild: true`, `edgedriver: false`, and `geckodriver: false`. It preserves other entries and top-level settings in the simple block mapping that pnpm writes. An unsupported shape (such as a flow-style `allowBuilds` mapping) is left unchanged with a warning, and that pnpm install is skipped; convert it to a simple block mapping and switch again.
 Every switch also runs the smoke checks once Node, npm and pnpm are available, even if packages were already installed or a global install failed, and prints warnings (never fails the switch): `mbt --version` and `mta --version`; `yo --generators --no-insight` lists `easy-ui5`, `@sap-ux/adp`, `@sap/adaptation-project`, `@sap/add-hdb-module`, `@sap/aicore`, `@sap/base-mta-module`, `@sap/cap-project`, and `@sap/fiori`; and `cf plugins` lists `ServiceInfo` on amd64. A missing `cf` on amd64 warns that ServiceInfo could not be verified.
 
 npm's global prefix is `$NPM_CONFIG_PREFIX` in the container (the image sets it to `~/.npm-global`; the profile and the script default to it) and nvm's default Node.js directory on the workstation, since nvm refuses `NPM_CONFIG_PREFIX`; a different default Node.js has its own prefix, so the next switch installs the npm globals again into it.
@@ -213,7 +188,7 @@ Either `bin` is on every shell's `PATH` (below), so `yo`, `mbt`, and `mta` run, 
 Where Node.js and pnpm come from depends on the profile:
 
 - **WSL2 workstation**: `tools/node-tools.sh` first installs nvm with its official install script (`PROFILE=/dev/null`, so it never edits `~/.zshrc`, `~/.bashrc`, or `~/.profile`), then `nvm install --lts` as nvm's default, then `npm install -g pnpm`, the way [Microsoft's Node.js on WSL guide](https://learn.microsoft.com/en-us/windows/dev-environment/javascript/nodejs-on-wsl) does it. The interactive workstation zsh loads nvm (`$NVM_DIR`, default `~/.nvm`), so `node`, `npm`, and `pnpm` are nvm's there. Every switch also links `$NVM_DIR/default` to nvm's default Node.js, and `$NVM_DIR/default/bin` is on every shell's `PATH` (see below), so scripts and `wsl.exe -e zsh -c ...` find them without loading nvm; after `nvm alias default ...`, switch again to move that link. As that guide advises, don't install another Node.js alongside it.
-- **Devcontainer**: the image (`cloud-practitioner/agentic-devcontainer`) brings its own Node.js 24 and Corepack pnpm (with `PNPM_HOME`), so the container profile has no nvm and its activation keeps the image's `PATH` to find them. The image installs none of the tools above that it hands to this repo, so the container profile is their only source there once the image drops them; until then both install the same packages, which is harmless.
+- **Devcontainer**: the image (`cloud-practitioner/agentic-devcontainer`) brings its own Node.js 24 and Corepack pnpm (with `PNPM_HOME`), so the container profile has no nvm and its activation keeps the image's `PATH` to find them. The dotfiles change lands first; a separate image change removes the tool installs afterwards. Until then both install the same globals idempotently, which is harmless; after that the container profile is their only source.
 
 Both profiles set `PNPM_HOME` (unless already set, default `${XDG_DATA_HOME:-~/.local/share}/pnpm`, as pnpm itself) and put `~/.local/bin` (herdr, Claude Code, Pi, Copilot, Antigravity), on the workstation `$NVM_DIR/default/bin` (or in the container `$NPM_CONFIG_PREFIX/bin`, default `~/.npm-global/bin`, which the profile also exports), then pnpm's global bin directories (`$PNPM_HOME/bin`, then `$PNPM_HOME` for older pnpm) on `PATH` right before `~/.nix-profile/bin` (or first, without it), once each.
 That puts them ahead of the Nix profile, the system directories, and the Windows `PATH` that WSL appends (`/mnt/c/...`), so a Nix-built `herdr` or a Windows Node.js or npm-global `claude`, `pi`, `copilot`, `agy`, `node`, `npm`, or `pnpm` never shadows these.
@@ -225,7 +200,7 @@ Apply changes the same way in each environment:
 - **WSL2 workstation**: pull and re-run `rebuild.sh`, as [Linux](#linux) shows.
 - **Devcontainer**: `hm-update`, as [Devcontainers](#devcontainers) shows.
 
-To check without applying, `bash tests/upstream-tools.test.sh` checks that neither profile installs a Nix-built herdr, Claude Code, Pi, Copilot CLI, or Antigravity, and `bash tests/node-tools.test.sh` checks both scripts' installs (nvm, Node.js, pnpm, the pnpm and npm globals, the skills, herdr, Pi, Copilot CLI, Claude Code, and Antigravity) against local fakes, and herdr's against its real installer.
+To check without applying, `bash tests/upstream-tools.test.sh` checks that neither profile installs Nix-built copies of the agent CLIs, and `bash tests/node-tools.test.sh` checks both install scripts against local fakes, and herdr's against its real installer. The latter requires Node.js and pnpm on `PATH` for semantic checks of generated pnpm configuration.
 
 ### Git identity
 
@@ -383,10 +358,8 @@ dev@container-x86_64-linux   # container as user "dev"
 node@container-x86_64-linux  # container as user "node"
 ```
 
-The devcontainer image installs no coding-agent CLIs: the container profile
-provides herdr, Claude Code, Pi, and the GitHub Copilot CLI (their own
-installers, unpinned), as
-[Upstream CLI tools](#upstream-cli-tools) describes. Inside
+For toolchain ownership and the image rollout, see
+[Upstream CLI tools](#upstream-cli-tools). Inside
 a container, `hm-update` fetches `~/.dotfiles` and makes a detached checkout of
 `~/.config/dotfiles/applied-rev`, which the workstation writes on every switch
 from the flake revision. A `-dirty` suffix warns and uses its base commit, not
