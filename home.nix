@@ -351,8 +351,13 @@ in
     config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.config/wezterm";
   home.file.".config/nvim".source =
     config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.config/nvim";
-  home.file.".config/herdr".source =
-    config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.config/herdr";
+  # Keep herdr's writable state out of the checkout; see README's symlink section.
+  home.file.".config/herdr/config.toml".source =
+    config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.config/herdr/config.toml";
+  home.activation.herdrConfigUnlink = lib.hm.dag.entryBefore [ "checkLinkTargets" ] ''
+    run ${pkgs.bash}/bin/bash ${./activation/herdr-config-unlink.sh} \
+      ${lib.escapeShellArg builtins.storeDir}
+  '';
   home.file.".claude/settings.json".source =
     config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.claude/settings.json";
 

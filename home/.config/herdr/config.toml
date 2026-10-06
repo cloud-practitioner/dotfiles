@@ -20,3 +20,7 @@ agent_panel_sort = "spaces"
 [theme]
 name = "rose-pine"
 auto_switch = false
+
+[session]
+# Firstmate must supply each worker's launch environment; herdr must not resume it.
+resume_agents_on_restore = false

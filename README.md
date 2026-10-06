@@ -455,6 +455,10 @@ The files under `home/` are the real files - editing them here is editing your l
 You only run `./rebuild.sh` when you change something that isn't just a symlinked file, like a package list or a system default.
 The one exception is Claude Code's settings when `CLAUDE_CONFIG_DIR` points elsewhere: re-applying adds only keys and hook commands missing from `$CLAUDE_CONFIG_DIR/settings.json`, and changes to existing values must be made in that file directly (see [Devcontainers](#devcontainers)).
 
+For herdr, only `~/.config/herdr/config.toml` links into this repo; `~/.config/herdr` stays a real directory for runtime state (`session.json`, `session-snapshots/`, sockets, logs). On the next switch, activation removes only the legacy Home Manager-owned whole-directory symlink before linking the file; real directories and user-owned symlinks are left alone. Existing runtime files in the checkout are not moved. This prepares the directory for a persistent devcontainer bind mount, which ships separately; this dotfiles change alone does not preserve sessions across container rebuilds.
+
+The herdr config sets `resume_agents_on_restore = false`: restored panes come back as plain shells rather than auto-resuming agents, on the WSL2 workstation as well as in devcontainers. Firstmate is responsible for relaunching its workers.
+
 ## Optional Pi configuration
 
 On Linux, both home profiles install Pi, unpinned, with its official installer (see [Upstream CLI tools](#upstream-cli-tools)). On macOS, Pi is opt-in: install it from its owner with the [official Pi instructions](https://pi.dev), for example:
