@@ -18,19 +18,24 @@ let
   # without it, once each, so they win over the Nix profile's, the system's,
   # and WSL's Windows-interop (/mnt/*) copies: ~/.local/bin first (herdr from
   # its vendor's installer, ahead of a Nix-built herdr from an older switch,
-  # and the launchers of Claude Code, Pi, and the GitHub Copilot CLI from
-  # their own installers, ahead of any npm or pnpm copy), then, on the
-  # workstation, $NVM_DIR/default/bin (nvm's default Node.js, npm, and pnpm,
-  # linked by tools/node-tools.sh), then pnpm's global bins ($PNPM_HOME/bin
-  # for pnpm 11+, $PNPM_HOME for older pnpm). It sets PNPM_HOME and NVM_DIR
-  # itself, with the same defaults as tools/node-tools.sh (and pnpm): an
-  # image's own PNPM_HOME wins.
+  # and the launchers of Claude Code, Pi, the GitHub Copilot CLI, and
+  # Antigravity from their own installers, ahead of any npm or pnpm copy),
+  # then, on the workstation, $NVM_DIR/default/bin (nvm's default Node.js,
+  # npm, and pnpm, linked by tools/node-tools.sh, and also npm's global bin
+  # there), or, in a container, $NPM_CONFIG_PREFIX/bin (npm's global bin; the
+  # image sets NPM_CONFIG_PREFIX to ~/.npm-global), then pnpm's global bins
+  # ($PNPM_HOME/bin for pnpm 11+, $PNPM_HOME for older pnpm). It sets
+  # PNPM_HOME, NVM_DIR (workstation), and NPM_CONFIG_PREFIX (container; nvm
+  # refuses it) itself, with the same defaults as tools/node-tools.sh (and
+  # pnpm): an image's own values win.
   nodePath = pkgs.writeText "node-tools-path.sh" (''
     export PNPM_HOME="''${PNPM_HOME:-''${XDG_DATA_HOME:-$HOME/.local/share}/pnpm}"
   '' + lib.optionalString isWorkstation ''
     export NVM_DIR="''${NVM_DIR:-$HOME/.nvm}"
+  '' + lib.optionalString (!isWorkstation) ''
+    export NPM_CONFIG_PREFIX="''${NPM_CONFIG_PREFIX:-$HOME/.npm-global}"
   '' + ''
-    __nt_front="${lib.concatStringsSep ":" ([ "$HOME/.local/bin" ] ++ lib.optional isWorkstation "$NVM_DIR/default/bin" ++ [ "$PNPM_HOME/bin" "$PNPM_HOME" ])}"
+    __nt_front="${lib.concatStringsSep ":" ([ "$HOME/.local/bin" ] ++ (if isWorkstation then [ "$NVM_DIR/default/bin" ] else [ "$NPM_CONFIG_PREFIX/bin" ]) ++ [ "$PNPM_HOME/bin" "$PNPM_HOME" ])}"
     __nt_rest="$PATH:"
     __nt_path=
     __nt_placed=
@@ -70,8 +75,8 @@ in
     nerd-fonts.hack
   ] ++ lib.optionals stdenv.isLinux [
     # Linux equivalents of the macOS Homebrew casks/brews in configuration.nix.
-    # herdr, Claude Code, Pi, and the GitHub Copilot CLI are not Nix packages:
-    # the nodeTools activation below installs them unpinned.
+    # herdr, Claude Code, Pi, the GitHub Copilot CLI, and Antigravity are not
+    # Nix packages: the bashTools activation below installs them unpinned.
     wezterm
   ] ++ lib.optionals (stdenv.isLinux && isWorkstation) [
     # Build/run devcontainers from the CLI; needs a Docker host.
@@ -93,19 +98,33 @@ in
     '';
   };
 
-  # herdr, Claude Code, Pi, and the GitHub Copilot CLI, unpinned from their
-  # own installers, at every Linux switch when missing (tools/node-tools.sh).
-  # The WSL2 workstation first gets nvm, Node.js LTS as nvm's default, and
-  # pnpm; a container uses its image's Node.js and pnpm. A failure (no pnpm,
-  # offline) only warns, so the switch still completes; the next switch
-  # retries.
+  # The toolchain, unpinned, installed at every Linux switch when missing, by
+  # two scripts that each warn on failure but never fail the switch (the next
+  # switch retries):
+  # - nodeTools (tools/node-tools.sh) first: Node.js and pnpm (the WSL2
+  #   workstation gets nvm, Node.js LTS as nvm's default, and pnpm; a
+  #   container uses its image's Node.js and pnpm), then the pnpm and npm
+  #   global packages and the agent skills;
+  # - bashTools (tools/bash-tools.sh) after it, since Pi's installer needs
+  #   Node.js: herdr, Claude Code, Pi, the GitHub Copilot CLI, and Antigravity
+  #   from their own curl installers.
   home.activation.nodeTools = lib.mkIf pkgs.stdenv.isLinux (
     lib.hm.dag.entryAfter [ "writeBoundary" ] ''
       if ! run env PATH="${lib.makeBinPath (with pkgs; [
           bash coreutils curl findutils gawk git gnugrep gnused gnutar gzip util-linux xz
         ])}:$PATH" \
         ${pkgs.bash}/bin/bash ${./tools/node-tools.sh} ${if isWorkstation then "workstation" else "container"}; then
-        warnEcho "tools/node-tools.sh failed (see above): ${if isWorkstation then "nvm, Node.js, pnpm, " else ""}herdr, Claude Code, Pi, or the GitHub Copilot CLI may be missing. Fix that, then switch again."
+        warnEcho "tools/node-tools.sh failed (see above): ${if isWorkstation then "nvm, Node.js, " else ""}pnpm, the pnpm or npm global tools (arc-1, ui5, cds, mbt, yo and its generators, ...), or the agent skills may be missing. Fix that, then switch again."
+      fi
+    ''
+  );
+  home.activation.bashTools = lib.mkIf pkgs.stdenv.isLinux (
+    lib.hm.dag.entryAfter [ "writeBoundary" "nodeTools" ] ''
+      if ! run env PATH="${lib.makeBinPath (with pkgs; [
+          bash coreutils curl findutils gawk git gnugrep gnused gnutar gzip util-linux xz
+        ])}:$PATH" \
+        ${pkgs.bash}/bin/bash ${./tools/bash-tools.sh}; then
+        warnEcho "tools/bash-tools.sh failed (see above): herdr, Claude Code, Pi, the GitHub Copilot CLI, or Antigravity may be missing. Fix that, then switch again."
       fi
     ''
   );
