@@ -25,6 +25,9 @@
 # export to the rc files in its HOME.
 #
 # Coverage:
+# - the ARC-1 policy isolation, completed-denial, timeout (including partial
+#   denial), and prerequisite-failure cases in test_arc1_policy_check; see
+#   README.md's "Upstream CLI tools" section for user-facing behavior;
 # - workstation, fresh HOME: nvm from its install script with PROFILE=/dev/null
 #   (no rc file touched), `nvm install --lts` as nvm's default, pnpm, then the
 #   pnpm globals (with allowBuilds written first), the agent skills with
@@ -38,7 +41,8 @@
 #   follows its repo's install, so the pinned copy wins;
 # - container: the image's own Node.js and pnpm, npm globals in
 #   ~/.npm-global (or $NPM_CONFIG_PREFIX), no nvm; without pnpm node-tools
-#   fails with one clear message while bash-tools still installs everything;
+#   reports the prerequisite failure and unproven policy while bash-tools
+#   still installs everything;
 # - a failing pnpm, npm, or skills step is reported and fails the run but does
 #   not stop the other steps; broken mbt, a generator yo does not list, and
 #   a missing ServiceInfo cf plugin are warnings (the run still reports them
@@ -173,7 +177,7 @@ cat >"$FIX/npm" <<EOF
 #!/bin/sh
 prefix=\${NPM_CONFIG_PREFIX:-\$(cd "\$(dirname "\$0")/.." && pwd)}
 case "\$1 \$2" in
-  "prefix -g") echo "\$prefix" ;;
+  "prefix -g") [ -z "\${NPM_FAKE_PREFIX_FAIL-}" ] || exit 1; echo "\$prefix" ;;
   "root -g") echo "\$prefix/lib/node_modules" ;;
   "install -g")
     echo "npm \$*" >>"\$NODE_TOOLS_LOG"
@@ -442,6 +446,50 @@ for rc in .zshrc .bashrc .profile; do
 done
 EOF
 
+# A fake arc1-cli. Its directory holds `mode` and
+# the `calls` log. In deny mode it refuses SAPTransport release only when
+# SAP_DENY_ACTIONS lists it, as arc-1 does.
+mkdir -p "$FIX/arc1"
+cat >"$FIX/arc1/arc1-cli" <<'EOF'
+#!/bin/sh
+here=$(dirname "$0")
+env_file=no
+[ ! -e .env ] || env_file=yes
+empty=yes
+[ -z "$(ls -A)" ] || empty=no
+echo "$* cwd=$PWD env_file=$env_file url=${SAP_URL-unset} user=${SAP_USER-unset} password=${SAP_PASSWORD-unset} writes=${SAP_ALLOW_TRANSPORT_WRITES-unset} deny=${SAP_DENY_ACTIONS-unset} leak=${ARC1_TEST_LEAK-unset} empty=$empty all_writes=${SAP_ALLOW_WRITES-unset} packages=${SAP_ALLOWED_PACKAGES-unset}" >>"$here/calls"
+[ "$1" = call ] || { echo "fake arc1-cli: unexpected: $*" >&2; exit 1; }
+mode=$(cat "$here/mode")
+case "$mode" in
+  deny)
+    case "${SAP_DENY_ACTIONS-}" in
+      *SAPTransport.release*) echo "WARN: [safety_blocked] SAPTransport.release"; echo "Action 'SAPTransport.release' is denied by server policy (SAP_DENY_ACTIONS)."; exit 1 ;;
+    esac
+    echo "released POLICYCHECK" ;;
+  allow) echo "released POLICYCHECK" ;;
+  fail) echo "Unknown action 'SAPTransport.release' in SAP_DENY_ACTIONS" >&2; exit 1 ;;
+  hang) exec sleep 30 ;;
+  deny-hang | deny-kill)
+    [ "$mode" != deny-kill ] || trap '' TERM
+    echo "Action 'SAPTransport.release' is denied by server policy (SAP_DENY_ACTIONS)."
+    exec sleep 30 ;;
+esac
+EOF
+chmod +x "$FIX/arc1/arc1-cli"
+echo deny >"$FIX/arc1/mode"
+mkdir -p "$FIX/arc1-timeout" "$FIX/arc1-setup"
+REAL_TIMEOUT=$(command -v timeout)
+[ -n "$REAL_TIMEOUT" ] || fail "timeout is required for the arc-1 policy check"
+cat >"$FIX/arc1-timeout/timeout" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >>"$FIX/arc1-timeout/calls"
+[ "\$1 \$2 \$3" = '-k 5 60' ] || exit 2
+shift 3
+exec "$REAL_TIMEOUT" -k 1 1 "\$@"
+EOF
+printf '#!/bin/sh\nexit 1\n' >"$FIX/arc1-setup/mktemp"
+chmod +x "$FIX/arc1-timeout/timeout" "$FIX/arc1-setup/mktemp"
+
 export NVM_INSTALL_URL="file://$FIX/install.sh"
 export HERDR_INSTALL_URL="file://$FIX/herdr-install.sh"
 export PI_INSTALL_URL="file://$FIX/pi-install.sh"
@@ -450,7 +498,7 @@ export CLAUDE_INSTALL_URL="file://$FIX/claude-install.sh"
 export ANTIGRAVITY_INSTALL_URL="file://$FIX/antigravity-install.sh"
 mkdir -p "$FIX/common"
 cp "$FIX/cf" "$FIX/common/cf"
-BASE_PATH="$FIX/common:/usr/bin:/bin"
+BASE_PATH="$FIX/arc1:$FIX/common:/usr/bin:/bin"
 WINDOWS_NPM="/mnt/c/Users/dev/AppData/Roaming/npm"
 
 # Runs tools/node-tools.sh $2 against scratch HOME $1 with PATH $3.
@@ -600,7 +648,7 @@ test_container_and_failures() {
     || fail "container with NPM_CONFIG_PREFIX failed: $out"
   [ -x "$home/custom/bin/yo" ] && [ ! -e "$home/.npm-global" ] || fail "container ignored NPM_CONFIG_PREFIX"
 
-  # No pnpm: node-tools stops with one clear message, nothing is installed,
+  # No pnpm: node-tools stops with clear warnings, nothing is installed,
   # and bash-tools still installs all five.
   home="$TMP_ROOT/ct-nopnpm"
   mkdir -p "$home"
@@ -609,6 +657,7 @@ test_container_and_failures() {
     fail "container without pnpm succeeded: $out"
   fi
   assert_contains "$out" "pnpm not found on PATH" "missing pnpm is not reported clearly: $out"
+  assert_contains "$out" "deny list is unproven because the policy check did not run" "missing pnpm hid the unproven FAB policy: $out"
   [ -z "$(calls)" ] || fail "node-tools installed something without pnpm: $(calls)"
   out=$(run_bash_tools "$home" "$BASE_PATH") || fail "bash-tools without pnpm failed: $out"
   [ "$(calls)" = "$(bash_installs "$home")" ] || fail "bash-tools without pnpm did not install the five CLIs: $(calls)"
@@ -617,6 +666,7 @@ test_container_and_failures() {
     fail "workstation without the nvm install script succeeded: $out"
   fi
   assert_contains "$out" "cannot install nvm" "a failed nvm download is not reported: $out"
+  assert_contains "$out" "deny list is unproven because the policy check did not run" "a failed nvm download hid the unproven FAB policy: $out"
   pass "container: the image's Node.js and pnpm, npm globals in ~/.npm-global (or \$NPM_CONFIG_PREFIX) where yo finds them, no nvm; without pnpm node-tools fails clearly and bash-tools still installs everything"
 }
 
@@ -698,14 +748,14 @@ test_smoke_checks_warn() {
   cp "$FIX/image/npm" "$FIX/image/pnpm" "$FIX/image/npx" "$home/image-no-cf/"
   ln -s "$REAL_NODE" "$home/image-no-cf/node"
   if [ -n "$AMD64" ]; then
-    if out=$(PNPM_HOME="$home/pnpm" run_tools "$home" container "$home/image-no-cf:/usr/bin:/bin"); then
+    if out=$(PNPM_HOME="$home/pnpm" run_tools "$home" container "$home/image-no-cf:$FIX/arc1:/usr/bin:/bin"); then
       fail "a missing cf CLI was silently accepted: $out"
     fi
     assert_contains "$out" "ServiceInfo plugin could not be verified because cf is missing" "a missing cf CLI did not warn: $out"
   fi
   printf '#!/bin/sh\necho aarch64\n' >"$home/image-no-cf/uname"
   chmod +x "$home/image-no-cf/uname"
-  out=$(PNPM_HOME="$home/pnpm" run_tools "$home" container "$home/image-no-cf:/usr/bin:/bin") || fail "an ARM re-switch tried to verify an amd64-only plugin: $out"
+  out=$(PNPM_HOME="$home/pnpm" run_tools "$home" container "$home/image-no-cf:$FIX/arc1:/usr/bin:/bin") || fail "an ARM re-switch tried to verify an amd64-only plugin: $out"
   assert_not_contains "$out" "ServiceInfo" "an ARM re-switch checked the amd64-only plugin: $out"
   rm -rf "$home/.npm-global/lib/node_modules/mta"
   if out=$(NPM_FAKE_FAIL=1 YO_FAKE_HIDE=@sap/cap-project PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH"); then
@@ -713,6 +763,89 @@ test_smoke_checks_warn() {
   fi
   assert_contains "$out" "warning: yo --generators does not list @sap/cap-project" "an npm failure suppressed an existing generator's smoke check: $out"
   pass "smoke checks warn on every switch, including existing globals, failed installs, and a missing cf CLI"
+}
+
+test_arc1_policy_check() {
+  local home out mode dir log="$FIX/arc1/calls" start path
+  local warning="node-tools: warning: the FAB write lane is unsafe with this ARC-1 install: deny list is unproven"
+  home="$TMP_ROOT/arc1"
+  mkdir -p "$home" "$TMP_ROOT/arc1-cwd"
+  echo SAP_PASSWORD=from-dotenv >"$TMP_ROOT/arc1-cwd/.env"
+  run_arc1() {
+    (cd "$TMP_ROOT/arc1-cwd" && ARC1_TEST_LEAK=real SAP_URL=https://real.example SAP_USER=real-user SAP_PASSWORD=real-secret \
+      SAP_ALLOW_WRITES=false SAP_ALLOW_TRANSPORT_WRITES=false SAP_ALLOWED_PACKAGES=real-packages \
+      SAP_DENY_ACTIONS=none PNPM_HOME="$home/pnpm" \
+      run_tools "$home" container "$FIX/arc1-timeout:$FIX/image:$BASE_PATH")
+  }
+  PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH" >/dev/null || fail "arc1 check setup failed"
+
+  for mode in deny allow fail hang deny-hang deny-kill; do
+    : >"$log"
+    : >"$FIX/arc1-timeout/calls"
+    echo "$mode" >"$FIX/arc1/mode"
+    start=$SECONDS
+    if out=$(run_arc1); then
+      [ "$mode" = deny ] || fail "an undenied release ($mode) was accepted: $out"
+      [ -z "$out" ] || fail "a denied release was not silent: $out"
+    else
+      [ "$mode" != deny ] || fail "a denied release warned or failed the run: $out"
+      assert_contains "$out" "$warning" "an undenied release ($mode) did not warn about the FAB write lane: $out"
+      assert_contains "$out" "smoke_checks did not complete" "an undenied release ($mode) was not reported: $out"
+      case "$mode" in
+        hang | deny-hang | deny-kill) assert_contains "$out" "arc1-cli policy check timed out" "a timeout ($mode) was not identified: $out" ;;
+      esac
+    fi
+    [ $((SECONDS - start)) -lt 20 ] || fail "a hung arc1-cli stalled the check"
+    [ "$(wc -l <"$log")" -eq 1 ] || fail "the policy check did not make exactly one ARC-1 invocation: $(cat "$log")"
+    assert_contains "$(cat "$log")" 'call SAPTransport --json {"action":"release"' "the policy check did not call SAPTransport release: $(cat "$log")"
+    assert_contains "$(cat "$log")" "env_file=no url=http://127.0.0.1:9 user=policy-check password=policy-check writes=true" "the policy check ran with the wrong environment: $(cat "$log")"
+    assert_contains "$(cat "$log")" "deny=SAPTransport.release,SAPTransport.release_recursive,SAPTransport.delete,SAPTransport.reassign,SAPTransport.remove_object leak=unset" "the policy check lost the FAB deny list or leaked the environment: $(cat "$log")"
+    assert_contains "$(cat "$log")" "empty=yes all_writes=true packages=/IQX/FAB*,/IQX/COMMON,/IQX/ONELIST_*" "the policy check lost FAB settings or did not use an empty directory: $(cat "$log")"
+    assert_not_contains "$(cat "$log")" "real" "a real SAP_* value or .env reached arc1-cli: $(cat "$log")"
+    assert_contains "$(cat "$FIX/arc1-timeout/calls")" "-k 5 60 env -i" "the policy check did not use the fixed timeout: $(cat "$FIX/arc1-timeout/calls")"
+    dir=$(sed -n 's/.* cwd=\([^ ]*\) env_file.*/\1/p' "$log" | head -n 1)
+    [ -n "$dir" ] && [ "$dir" != "$TMP_ROOT/arc1-cwd" ] || fail "arc1-cli did not run in its own directory: '$dir'"
+    [ ! -e "$dir" ] || fail "the policy check left its temp directory behind: $dir"
+  done
+  echo deny >"$FIX/arc1/mode"
+
+  for mode in absent setup; do
+    : >"$log"
+    case "$mode" in
+      absent) path="$FIX/image:$FIX/common:/usr/bin:/bin" ;;
+      setup) path="$FIX/arc1-setup:$FIX/image:$BASE_PATH" ;;
+    esac
+    out=$(PNPM_HOME="$home/pnpm" run_tools "$home" container "$path") && fail "a policy check that could not run ($mode) was accepted: $out"
+    assert_contains "$out" "$warning" "a policy check that could not run ($mode) did not warn about the FAB write lane: $out"
+    assert_contains "$out" "smoke_checks did not complete" "a policy check that could not run ($mode) was not reported: $out"
+    [ ! -s "$log" ] || fail "a policy check that could not run ($mode) invoked arc1-cli: $(cat "$log")"
+    case "$mode" in
+      absent) assert_contains "$out" "arc1-cli is not on PATH" "an absent CLI was not identified: $out" ;;
+      setup) assert_contains "$out" "cannot create a temp directory" "scratch setup failure was not identified: $out" ;;
+    esac
+  done
+  mkdir -p "$FIX/arc1-no-npm"
+  ln -s "$(command -v bash)" "$FIX/arc1-no-npm/bash"
+  cp "$FIX/pnpm" "$FIX/arc1-no-npm/pnpm"
+  for mode in no-pnpm no-npm prefix workstation; do
+    : >"$log"
+    case "$mode" in
+      no-pnpm) out=$(run_tools "$home" container "$BASE_PATH") ;;
+      no-npm) out=$(run_tools "$home" container "$FIX/arc1-no-npm") ;;
+      prefix) out=$(NPM_FAKE_PREFIX_FAIL=1 PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") ;;
+      workstation) out=$(NVM_INSTALL_URL="file://$TMP_ROOT/missing.sh" run_tools "$TMP_ROOT/arc1-workstation" workstation "$BASE_PATH") ;;
+    esac && fail "a fatal prerequisite failure ($mode) was accepted: $out"
+    assert_contains "$out" "$warning" "a fatal prerequisite failure ($mode) did not warn about the FAB write lane: $out"
+    assert_contains "$out" "because the policy check did not run" "a fatal prerequisite failure ($mode) hid the skipped policy check: $out"
+    case "$mode" in
+      no-pnpm) assert_contains "$out" "pnpm not found on PATH" "the missing pnpm path was not exercised: $out" ;;
+      no-npm) assert_contains "$out" "npm not found on PATH" "the missing npm path was not exercised: $out" ;;
+      prefix) assert_contains "$out" "npm prefix -g failed" "the failed prefix path was not exercised: $out" ;;
+      workstation) assert_contains "$out" "cannot install nvm" "the workstation setup failure was not exercised: $out" ;;
+    esac
+    [ ! -s "$log" ] || fail "a fatal prerequisite failure ($mode) invoked arc1-cli: $(cat "$log")"
+  done
+  pass "the arc-1 policy check is silent only for completed denial and warns on timeouts and prerequisite failures"
 }
 
 test_pnpm_policy() {
@@ -1078,6 +1211,7 @@ test_activation() {
   out=$(PNPM_HOME="$home/pnpm" run_activation "$CT" "$home" "$BASE_PATH" nodeTools) \
     || fail "$CT: activation without pnpm failed the switch: $out"
   assert_contains "$out" "pnpm not found on PATH" "$CT: activation hides why it failed: $out"
+  assert_contains "$out" "the FAB write lane is unsafe with this ARC-1 install: deny list is unproven because the policy check did not run" "$CT: activation hid the unproven FAB policy: $out"
   assert_contains "$out" "WARN: tools/node-tools.sh failed" "$CT: activation does not warn: $out"
   assert_contains "$out" "switch continues" "$CT: activation stopped the switch: $out"
   out=$(PNPM_HOME="$home/pnpm" HERDR_INSTALL_URL="file://$TMP_ROOT/missing.sh" run_activation "$CT" "$home" "$BASE_PATH" bashTools) \
@@ -1202,6 +1336,7 @@ test_only_missing_is_installed
 test_container_and_failures
 test_step_failures_do_not_block
 test_smoke_checks_warn
+test_arc1_policy_check
 test_pnpm_policy
 test_skill_pin_retries
 test_bash_tools_failures

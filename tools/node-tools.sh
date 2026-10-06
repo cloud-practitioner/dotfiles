@@ -45,9 +45,8 @@
 # For presence and pin checks, re-switch behavior, and refresh guidance, see
 # README.md's "Upstream CLI tools" section.
 #
-# Smoke checks warn, never block: mbt and mta print their version, `yo
-# --generators` lists every generator's namespace, and on amd64
-# `cf plugins` lists ServiceInfo.
+# For smoke-check behavior and FAB policy warnings, see README.md's
+# "Upstream CLI tools" section; arc1_policy_check handles policy isolation.
 # A failing step does not stop the others; the script then exits non-zero with
 # one message per failure, which the Home Manager activation turns into a
 # warning so the switch still completes. Not having Node.js or pnpm stops it.
@@ -83,6 +82,7 @@ say() {
 
 die() {
   printf 'node-tools: %s\n' "$*" >&2
+  warn "the FAB write lane is unsafe with this ARC-1 install: deny list is unproven because the policy check did not run"
   exit 1
 }
 
@@ -312,6 +312,35 @@ ensure_skills() {
   pinned_merge_conflicts_present || oops "resolving-merge-conflicts lock metadata does not identify the pinned source and revision" || return 1
 }
 
+# Keep every ARC-1 invocation inside the scrubbed scratch environment: arc-1
+# reads .env from its working directory, so env -i alone cannot isolate it.
+# The deny check precedes argument validation and any HTTP call; unknown
+# SAP_DENY_ACTIONS names abort startup (fail-fast). This lets us probe policy
+# with dummy credentials and a dead local endpoint without contacting SAP.
+# For check outcomes and warnings, see README.md's "Upstream CLI tools".
+arc1_policy_check() {
+  local dir out var status=0 keep=()
+  local unsafe="the FAB write lane is unsafe with this ARC-1 install: deny list is unproven"
+  command -v arc1-cli >/dev/null 2>&1 || { warn "$unsafe: arc1-cli is not on PATH"; return 0; }
+  dir=$(mktemp -d) || { warn "$unsafe: cannot create a temp directory for the arc-1 policy check"; return 0; }
+  # Only what node and the pnpm/nvm shims need survives the scrub.
+  for var in NVM_DIR PNPM_HOME TMPDIR LANG; do
+    [ -z "${!var:-}" ] || keep+=("$var=${!var}")
+  done
+  out=$(cd "$dir" && timeout -k 5 60 env -i PATH="$PATH" HOME="$HOME" ${keep[@]+"${keep[@]}"} \
+    SAP_URL=http://127.0.0.1:9 SAP_USER=policy-check SAP_PASSWORD=policy-check \
+    SAP_ALLOW_WRITES=true SAP_ALLOW_TRANSPORT_WRITES=true \
+    SAP_ALLOWED_PACKAGES='/IQX/FAB*,/IQX/COMMON,/IQX/ONELIST_*' \
+    SAP_DENY_ACTIONS='SAPTransport.release,SAPTransport.release_recursive,SAPTransport.delete,SAPTransport.reassign,SAPTransport.remove_object' \
+    arc1-cli call SAPTransport --json '{"action":"release","transport":"POLICYCHECK"}' 2>&1 </dev/null) || status=$?
+  rm -rf "$dir"
+  case "$status:$out" in
+    124:* | 137:*) warn "$unsafe: arc1-cli policy check timed out" ;;
+    *"denied by server policy (SAP_DENY_ACTIONS)"*) ;;
+    *) warn "$unsafe: arc1-cli did not answer 'denied by server policy (SAP_DENY_ACTIONS)' for SAPTransport release: $(tail -n 1 <<<"$out")" ;;
+  esac
+}
+
 smoke_checks() {
   local out ns
   if command -v mbt >/dev/null 2>&1; then
@@ -344,6 +373,7 @@ smoke_checks() {
       fi
       ;;
   esac
+  arc1_policy_check
 }
 
 main() {
