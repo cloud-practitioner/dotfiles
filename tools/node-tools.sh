@@ -47,7 +47,7 @@
 #
 # Smoke checks warn, never block: mbt and mta print their version, `yo
 # --generators` lists every generator's namespace, and on amd64
-# `cf plugins` lists ServiceInfo, and (when arc1-cli is on PATH) the FAB write
+# `cf plugins` lists ServiceInfo, and the FAB write
 # lane's deny list still works with the floating arc-1: see arc1_policy_check.
 # A failing step does not stop the others; the script then exits non-zero with
 # one message per failure, which the Home Manager activation turns into a
@@ -323,17 +323,16 @@ ensure_skills() {
 # answer is "Action 'SAPTransport.release' is denied by server policy
 # (SAP_DENY_ACTIONS)." Anything else warns: a non-denial, a CLI error, a
 # timeout, or an action name a future arc-1 rejects at start (it fails fast).
-# ARC1_POLICY_TIMEOUT (default 60 seconds) bounds the CLI; the tests shorten it.
 arc1_policy_check() {
-  local dir version out var keep=()
-  command -v arc1-cli >/dev/null 2>&1 || return 0
-  version=$(timeout 60 arc1-cli --version 2>&1 </dev/null | tail -n 1 || true)
-  dir=$(mktemp -d) || { warn "cannot create a temp directory for the arc-1 policy check"; return 0; }
+  local dir out var keep=()
+  local unsafe="the FAB write lane is unsafe with this ARC-1 install: deny list is unproven"
+  command -v arc1-cli >/dev/null 2>&1 || { warn "$unsafe: arc1-cli is not on PATH"; return 0; }
+  dir=$(mktemp -d) || { warn "$unsafe: cannot create a temp directory for the arc-1 policy check"; return 0; }
   # Only what node and the pnpm/nvm shims need survives the scrub.
   for var in NVM_DIR PNPM_HOME TMPDIR LANG; do
     [ -z "${!var:-}" ] || keep+=("$var=${!var}")
   done
-  out=$(cd "$dir" && timeout -k 5 "${ARC1_POLICY_TIMEOUT:-60}" env -i PATH="$PATH" HOME="$HOME" ${keep[@]+"${keep[@]}"} \
+  out=$(cd "$dir" && timeout -k 5 60 env -i PATH="$PATH" HOME="$HOME" ${keep[@]+"${keep[@]}"} \
     SAP_URL=http://127.0.0.1:9 SAP_USER=policy-check SAP_PASSWORD=policy-check \
     SAP_ALLOW_WRITES=true SAP_ALLOW_TRANSPORT_WRITES=true \
     SAP_ALLOWED_PACKAGES='/IQX/FAB*,/IQX/COMMON,/IQX/ONELIST_*' \
@@ -342,7 +341,7 @@ arc1_policy_check() {
   rm -rf "$dir"
   case "$out" in
     *"denied by server policy (SAP_DENY_ACTIONS)"*) ;;
-    *) warn "the FAB write lane is unsafe with this ARC-1 version (${version:-unknown}): arc1-cli did not answer 'denied by server policy (SAP_DENY_ACTIONS)' for SAPTransport release, so the deny list is not proven: $(tail -n 1 <<<"$out")" ;;
+    *) warn "$unsafe: arc1-cli did not answer 'denied by server policy (SAP_DENY_ACTIONS)' for SAPTransport release: $(tail -n 1 <<<"$out")" ;;
   esac
 }
 
