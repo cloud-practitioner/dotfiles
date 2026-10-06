@@ -179,7 +179,7 @@ The Pi, Copilot, and Antigravity installers run without a controlling terminal, 
   So a switch runs it with a scratch `HOME` and `--dir ~/.local/bin`: the binary lands in the real `~/.local/bin`, the rc files that the installer edits are the scratch home's, and that directory is removed afterwards.
 
 Their own updaters (`herdr update`, `claude update`, `pi update`, `copilot update`, and `agy`'s) keep them current.
-`bash tests/node-tools.test.sh` covers both scripts against local fakes, with Node.js and pnpm on `PATH` for semantic checks of generated pnpm configuration. `bash tests/node-tools.test.sh node-tools` limits the run to the script-level toolchain checks, without the real herdr installer or Home Manager checks.
+`bash tests/node-tools.test.sh` covers both scripts against local fakes, with Node.js and pnpm on `PATH` for semantic checks of generated pnpm configuration.
 
 **The pnpm and npm global tools and the agent skills** (`tools/node-tools.sh`) install on the profile's Node.js (below), as the `agentic-devcontainer` Dockerfile used to:
 
@@ -205,7 +205,7 @@ A tool counts as missing when pnpm's or npm's global list lacks its package, or 
 The `skills` CLI reads `owner/repo@X` as a skill name, so there is no `@latest` on them, and `--agent universal` is required (`--yes` alone targets 50+ agent config directories).
 Afterwards the script checks that `find-skills` and `resolving-merge-conflicts` are there and that the latter's lock metadata identifies the pin.
 Before a pnpm global install, the script sets the four declared `allowBuilds` booleans in `pnpm-workspace.yaml`, preserving other entries and top-level settings in the simple block mapping that pnpm writes. An unsupported shape (such as a flow-style `allowBuilds` mapping) is left unchanged with a warning, and that pnpm install is skipped; convert it to a simple block mapping and switch again.
-Every switch also runs the smoke checks, even if packages were already installed or an install failed, and prints warnings (never fails the switch): `mbt --version` and `mta --version`; `yo --generators --no-insight` lists `easy-ui5`, `@sap-ux/adp`, `@sap/adaptation-project`, `@sap/add-hdb-module`, `@sap/aicore`, `@sap/base-mta-module`, `@sap/cap-project`, and `@sap/fiori`; and `cf plugins` lists `ServiceInfo` on amd64. A missing `cf` on amd64 warns that ServiceInfo could not be verified.
+Every switch also runs the smoke checks once Node, npm and pnpm are available, even if packages were already installed or a global install failed, and prints warnings (never fails the switch): `mbt --version` and `mta --version`; `yo --generators --no-insight` lists `easy-ui5`, `@sap-ux/adp`, `@sap/adaptation-project`, `@sap/add-hdb-module`, `@sap/aicore`, `@sap/base-mta-module`, `@sap/cap-project`, and `@sap/fiori`; and `cf plugins` lists `ServiceInfo` on amd64. A missing `cf` on amd64 warns that ServiceInfo could not be verified.
 
 npm's global prefix is `$NPM_CONFIG_PREFIX` in the container (the image sets it to `~/.npm-global`; the profile and the script default to it) and nvm's default Node.js directory on the workstation, since nvm refuses `NPM_CONFIG_PREFIX`; a different default Node.js has its own prefix, so the next switch installs the npm globals again into it.
 Either `bin` is on every shell's `PATH` (below), so `yo`, `mbt`, and `mta` run, and `yo` finds its generators there.

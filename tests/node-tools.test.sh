@@ -1202,7 +1202,6 @@ test_step_failures_do_not_block
 test_smoke_checks_warn
 test_pnpm_policy
 test_skill_pin_retries
-[ "${1:-}" != node-tools ] || exit 0
 test_bash_tools_failures
 test_antigravity_scratch_home
 test_migrate_pnpm_copies
