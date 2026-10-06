@@ -86,8 +86,10 @@ AGY_INSTALL="antigravity-installer tty=no dir=%HOME%/.local/bin"
 PI_REMOVE="pnpm remove -g @earendil-works/pi-coding-agent"
 COPILOT_REMOVE="pnpm remove -g @github/copilot"
 export NODE_TOOLS_LOG="$TMP_ROOT/calls.log"
-export REAL_NODE=$(command -v node) NODE_TOOLS_TEST_PATH=$PATH
-export REAL_PNPM=$(command -v pnpm)
+REAL_NODE=$(command -v node)
+export REAL_NODE NODE_TOOLS_TEST_PATH=$PATH
+REAL_PNPM=$(command -v pnpm)
+export REAL_PNPM
 [ -n "$REAL_NODE" ] && [ -n "$REAL_PNPM" ] || fail "node and pnpm are required for configuration-consumer checks"
 unset NVM_DIR NVM_BIN NVM_INC PNPM_HOME XDG_DATA_HOME XDG_STATE_HOME NPM_CONFIG_PREFIX
 
