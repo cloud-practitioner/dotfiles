@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Behavior checks that the Linux home profiles leave the upstream CLI tools to
-# their vendors' installers: Home Manager installs herdr, Claude Code, Pi, and
-# the GitHub Copilot CLI unpinned at switch time (tests/node-tools.test.sh
-# covers that), so no profile may ship a Nix-built copy that could shadow them.
+# their vendors' installers: Home Manager installs herdr, Claude Code, Pi, the
+# GitHub Copilot CLI, and Antigravity unpinned at switch time
+# (tests/node-tools.test.sh covers that), so no profile may ship a Nix-built
+# copy that could shadow them.
 #
 # Coverage:
 # - both Linux home profiles (workstation and container) for this machine's
-#   system list no herdr, Claude Code, Pi, or Copilot CLI package;
-# - the built profiles' home-path has no herdr, claude, pi, or copilot binary,
+#   system list no herdr, Claude Code, Pi, Copilot CLI, or Antigravity package;
+# - the built profiles' home-path has no herdr, claude, pi, copilot, or agy binary,
 #   so a switch removes the Nix-built herdr that an older switch installed.
 #
 # Nix evaluates the flake from Git, so new files must be tracked (`git add`).
@@ -43,10 +44,10 @@ test_profiles_install_no_nix_builds() {
   for profile in $(profiles); do
     packages=$(nix eval --json "$ROOT#homeConfigurations.\"$profile\".config.home.packages" \
       --apply 'map (p: p.pname or p.name)' 2>/dev/null) || fail "$profile: cannot evaluate home.packages"
-    [ "$(jq '[.[] | select(test("^(herdr|pi|pi-coding-agent|claude-code|github-copilot-cli)$"))] | length' <<<"$packages")" = 0 ] \
-      || fail "$profile: still installs a Nix-built herdr, Claude Code, Pi, or Copilot CLI: $packages"
+    [ "$(jq '[.[] | select(test("^(herdr|pi|pi-coding-agent|claude-code|github-copilot-cli|antigravity|google-antigravity|antigravity-cli)$"))] | length' <<<"$packages")" = 0 ] \
+      || fail "$profile: still installs a Nix-built herdr, Claude Code, Pi, Copilot CLI, or Antigravity: $packages"
   done
-  pass "workstation and container profiles install no Nix-built herdr, Claude Code, Pi, or Copilot CLI"
+  pass "workstation and container profiles install no Nix-built herdr, Claude Code, Pi, Copilot CLI, or Antigravity"
 }
 
 test_built_profiles_ship_no_nix_builds() {
@@ -55,11 +56,11 @@ test_built_profiles_ship_no_nix_builds() {
   for profile in $(profiles); do
     out=$(nix build --no-link --print-out-paths "$ROOT#homeConfigurations.\"$profile\".activationPackage" 2>/dev/null) \
       || fail "$profile: activation package does not build"
-    for tool in herdr claude pi copilot; do
+    for tool in herdr claude pi copilot agy; do
       [ ! -e "$out/home-path/bin/$tool" ] || fail "$profile: the home profile still ships a Nix-built $tool"
     done
   done
-  pass "built workstation and container profiles ship no herdr, claude, pi, or copilot binary"
+  pass "built workstation and container profiles ship no herdr, claude, pi, copilot, or agy binary"
 }
 
 test_profiles_install_no_nix_builds
