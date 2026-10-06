@@ -25,14 +25,9 @@
 # export to the rc files in its HOME.
 #
 # Coverage:
-# - the arc-1 policy smoke check, with a fake arc1-cli (mode set by a file next
-#   to it) that logs the cwd and environment it was called with: silent when
-#   the fake answers "denied by server policy (SAP_DENY_ACTIONS)", a warning
-#   identifying the ARC-1 install and the FAB write lane when it does not (a
-#   non-denial, a CLI error, a hang cut off by the timeout, an absent CLI, or
-#   scratch setup failure); the call runs in an empty temp directory (removed
-#   afterwards) with the FAB settings, a dead local SAP_URL, dummy credentials,
-#   and no real SAP_* variable or .env;
+# - the ARC-1 policy isolation, completed-denial, timeout (including partial
+#   denial), and prerequisite-failure cases in test_arc1_policy_check; see
+#   README.md's "Upstream CLI tools" section for user-facing behavior;
 # - workstation, fresh HOME: nvm from its install script with PROFILE=/dev/null
 #   (no rc file touched), `nvm install --lts` as nvm's default, pnpm, then the
 #   pnpm globals (with allowBuilds written first), the agent skills with
@@ -46,7 +41,8 @@
 #   follows its repo's install, so the pinned copy wins;
 # - container: the image's own Node.js and pnpm, npm globals in
 #   ~/.npm-global (or $NPM_CONFIG_PREFIX), no nvm; without pnpm node-tools
-#   fails with one clear message while bash-tools still installs everything;
+#   reports the prerequisite failure and unproven policy while bash-tools
+#   still installs everything;
 # - a failing pnpm, npm, or skills step is reported and fails the run but does
 #   not stop the other steps; broken mbt, a generator yo does not list, and
 #   a missing ServiceInfo cf plugin are warnings (the run still reports them

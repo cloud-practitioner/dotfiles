@@ -45,10 +45,8 @@
 # For presence and pin checks, re-switch behavior, and refresh guidance, see
 # README.md's "Upstream CLI tools" section.
 #
-# Smoke checks warn, never block: mbt and mta print their version, `yo
-# --generators` lists every generator's namespace, and on amd64
-# `cf plugins` lists ServiceInfo, and the FAB write
-# lane's deny list still works with the floating arc-1: see arc1_policy_check.
+# For smoke-check behavior and FAB policy warnings, see README.md's
+# "Upstream CLI tools" section; arc1_policy_check handles policy isolation.
 # A failing step does not stop the others; the script then exits non-zero with
 # one message per failure, which the Home Manager activation turns into a
 # warning so the switch still completes. Not having Node.js or pnpm stops it.
@@ -314,16 +312,12 @@ ensure_skills() {
   pinned_merge_conflicts_present || oops "resolving-merge-conflicts lock metadata does not identify the pinned source and revision" || return 1
 }
 
-# arc-1 floats to @latest, so every switch proves that the arc-dgw-fab server's
-# deny list still blocks transport release with the installed version. It runs
-# `arc1-cli call SAPTransport` with the FAB settings against a dead local
-# endpoint and dummy credentials, in an empty temp directory (arc-1 reads .env
-# from its working directory) with every other variable scrubbed (env -i), so a
-# real SAP_* value or .env can never leak in and no SAP system is contacted.
-# The deny check runs before argument validation and any HTTP call, so the
-# answer is "Action 'SAPTransport.release' is denied by server policy
-# (SAP_DENY_ACTIONS)." Anything else warns: a non-denial, a CLI error, a
-# timeout, or an action name a future arc-1 rejects at start (it fails fast).
+# Keep every ARC-1 invocation inside the scrubbed scratch environment: arc-1
+# reads .env from its working directory, so env -i alone cannot isolate it.
+# The deny check precedes argument validation and any HTTP call; unknown
+# SAP_DENY_ACTIONS names abort startup (fail-fast). This lets us probe policy
+# with dummy credentials and a dead local endpoint without contacting SAP.
+# For check outcomes and warnings, see README.md's "Upstream CLI tools".
 arc1_policy_check() {
   local dir out var status=0 keep=()
   local unsafe="the FAB write lane is unsafe with this ARC-1 install: deny list is unproven"
