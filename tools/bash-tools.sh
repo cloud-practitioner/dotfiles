@@ -7,7 +7,7 @@
 #   curl -fsSL https://pi.dev/install.sh | sh                     (Pi)
 #   curl -fsSL https://gh.io/copilot-install | bash               (GitHub Copilot CLI)
 #   curl -fsSL https://claude.ai/install.sh | bash                (Claude Code)
-#   curl -fsSL https://antigravity.google/cli/install.sh | bash   (Antigravity CLI)
+#   Antigravity CLI: see ensure_antigravity below for its download and isolation.
 #
 # All are unpinned, so their own updaters keep them current. Each launcher
 # ends up in ~/.local/bin, which home.nix puts first on PATH, and must answer

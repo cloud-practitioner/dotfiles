@@ -170,6 +170,7 @@ The Pi and Copilot installers run without a controlling terminal, so they never 
 - **Antigravity** is the `agy` binary at `~/.local/bin/agy` (checked against the SHA-512 in its release manifest; it updates itself in the background).
   Its installer ends by running `agy install`, which appends a PATH export to `~/.zshrc`, `~/.bashrc`, and `~/.profile`, and the script has no flag to turn that off.
   So a switch runs it with a scratch `HOME` and `--dir ~/.local/bin`: the binary lands in the real `~/.local/bin`, the rc files that the installer edits are the scratch home's, and that directory is removed afterwards.
+  Download failures are reported separately from installer execution failures; for the latter, the installer's output appears above the failure message.
 
 Their own updaters (`herdr update`, `claude update`, `pi update`, `copilot update`, and `agy`'s) keep them current.
 
