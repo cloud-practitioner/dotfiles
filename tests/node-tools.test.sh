@@ -58,6 +58,8 @@
 #   its installer fails the run;
 # - Antigravity's installer gets a scratch HOME and --dir ~/.local/bin: agy
 #   lands in the real ~/.local/bin and no real rc file changes;
+# - a gzip-encoded Antigravity installer download (which the vendor's server
+#   sends intermittently) is decoded by curl --compressed and still installs agy;
 # - herdr's real installer (https://herdr.dev/install.sh, skipped offline)
 #   installs herdr's latest release as ~/.local/bin/herdr, which accepts
 #   home/.config/herdr/config.toml; a re-run is a quiet no-op;
@@ -992,7 +994,7 @@ test_bash_tools_failures() {
     fail "a failing Antigravity installer was accepted: $out"
   fi
   assert_contains "$out" "Could not connect to the release server" "the Antigravity installer's own error is hidden: $out"
-  assert_contains "$out" "cannot install the Antigravity CLI" "a failed Antigravity install is not reported: $out"
+  assert_contains "$out" "the Antigravity installer from" "a failed Antigravity install is not reported: $out"
   assert_contains "$out" "failed: antigravity" "the failed step is not named: $out"
   pass "bash-tools reports each failed installer without stopping the others"
 }
@@ -1013,6 +1015,43 @@ test_antigravity_scratch_home() {
     [ "$(cat "$home/$rc")" = "# mine" ] || fail "Antigravity's installer changed $home/$rc"
   done
   pass "Antigravity's installer runs in a scratch HOME without a terminal with --dir ~/.local/bin: agy lands there and no real rc file changes"
+}
+
+# antigravity.google intermittently answers with a gzip-encoded body even when
+# the request offered no gzip, and plain curl saves those bytes undecoded.
+# A fake curl plays that server for one URL: without --compressed it saves the
+# gzipped installer, with it the decoded script; any other URL goes to real curl.
+test_antigravity_gzip_download() {
+  local home="$TMP_ROOT/agy-gzip" real_curl out url=https://antigravity-gzip.invalid/cli/install.sh
+  mkdir -p "$home" "$FIX/gzip-curl"
+  real_curl=$(command -v curl)
+  gzip -c <"$FIX/antigravity-install.sh" >"$FIX/gzip-curl/install.sh.gz"
+  cat >"$FIX/gzip-curl/curl" <<CURL
+#!/bin/bash
+hit=no out= compressed=no prev=
+for arg in "\$@"; do
+  case "\$arg" in
+    --compressed) compressed=yes ;;
+    $url) hit=yes ;;
+  esac
+  [ "\$prev" != -o ] || out=\$arg
+  prev=\$arg
+done
+[ "\$hit" = yes ] || exec "$real_curl" "\$@"
+[ -n "\$out" ] || { echo "fake curl: expected -o" >&2; exit 2; }
+if [ "\$compressed" = yes ]; then
+  gzip -dc "$FIX/gzip-curl/install.sh.gz" >"\$out"
+else
+  cp "$FIX/gzip-curl/install.sh.gz" "\$out"
+fi
+CURL
+  chmod +x "$FIX/gzip-curl/curl"
+  : >"$NODE_TOOLS_LOG"
+  out=$(ANTIGRAVITY_INSTALL_URL=$url run_bash_tools "$home" "$FIX/gzip-curl:$FIX/image:$BASE_PATH") \
+    || fail "a gzip-encoded Antigravity installer was not installed: $out"
+  [ "$("$home/.local/bin/agy" --version)" = agy-fake ] || fail "agy is missing after a gzip-encoded installer download"
+  assert_contains "$(calls)" "antigravity-installer" "the decoded Antigravity installer did not run: $(calls)"
+  pass "a gzip-encoded Antigravity installer download is decoded (curl --compressed) and installs agy"
 }
 
 # Installs package $2 (with optional flags $3...) with the fake pnpm into scratch
@@ -1341,6 +1380,7 @@ test_pnpm_policy
 test_skill_pin_retries
 test_bash_tools_failures
 test_antigravity_scratch_home
+test_antigravity_gzip_download
 test_migrate_pnpm_copies
 test_pi_installer_failure
 test_cli_must_run
