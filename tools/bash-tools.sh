@@ -183,15 +183,18 @@ ensure_antigravity() {
   scratch=$(mktemp -d "${TMPDIR:-/tmp}/antigravity-install.XXXXXX") \
     || oops "cannot create a scratch directory for the Antigravity installer" || return 1
   say "installing the Antigravity CLI with its official installer"
-  curl -fsSL --proto-redir '=https' "$ANTIGRAVITY_INSTALL_URL" -o "$scratch/install.sh" || {
+  # --compressed: antigravity.google intermittently answers with a
+  # gzip-encoded body even when the request did not offer gzip, which plain
+  # curl saves undecoded (bash then fails with "cannot execute binary file").
+  curl -fsSL --compressed --proto-redir '=https' "$ANTIGRAVITY_INSTALL_URL" -o "$scratch/install.sh" || {
     rm -rf "$scratch"
-    oops "cannot download the Antigravity installer from $ANTIGRAVITY_INSTALL_URL (offline?)" || return 1
+    oops "cannot download the Antigravity installer from $ANTIGRAVITY_INSTALL_URL (curl failed: network, DNS, or server error)" || return 1
   }
   mkdir -p "$dir"
   out=$(HOME=$scratch setsid -w bash "$scratch/install.sh" --dir "$dir" </dev/null 2>&1) || {
     printf '%s\n' "$out" >&2
     rm -rf "$scratch"
-    oops "cannot install the Antigravity CLI from $ANTIGRAVITY_INSTALL_URL (offline?)" || return 1
+    oops "the Antigravity installer from $ANTIGRAVITY_INSTALL_URL failed (its output is above)" || return 1
   }
   rm -rf "$scratch"
   [ -x "$bin" ] || oops "the Antigravity installer did not create $bin" || return 1
