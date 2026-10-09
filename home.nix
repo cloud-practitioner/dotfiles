@@ -187,20 +187,14 @@ in
       bindkey '^[[27;2;13~' insert-newline     # Shift+Enter as Herdr sends it to the shell
       bindkey '^[[13;2u' insert-newline        # Shift+Enter (CSI-u / kitty keyboard terminals)
 
-      # Windows-style cursor keys. Terminals (Windows Terminal, and Herdr, whose
-      # key tables encode arrows and Home/End this way) send a modified arrow as
-      # the xterm sequence ESC [ 1 ; <mod> <A-D>, with <mod> = 1 + Shift(1) +
-      # Alt(2) + Ctrl(4). zle has no binding for any of them, swallows
-      # ESC [ 1 and inserts the rest (";5D"), so bind them all. The Windows
-      # choices:
-      #   Ctrl or Alt + Left/Right  move by word (as WORDCHARS defines it)
-      #   Shift + Left/Right        move by character (zle has no Shift selection)
-      #   any modifier + Up/Down    the plain key (history, or a line of a multi-line buffer)
-      #   Home/End                  start/end of line; Ctrl+Home/End too
+      # See README's Zsh line editing section for the user-facing choices.
+      # Windows Terminal and Herdr encode modified arrows/Home/End as xterm
+      # ESC [ 1 ; <mod> <A-D,H,F>, with <mod> = 1 + Shift(1) + Alt(2) + Ctrl(4).
+      # Without explicit bindings, zle can consume only an escape-sequence
+      # prefix and insert the remainder as text.
       () {
         local m k left=backward-char right=forward-char
         for m in {2..8}; do
-          # Ctrl or Alt in the modifier: by word; otherwise (Shift): by character.
           if (( (m - 1) & 6 )); then left=backward-word right=forward-word
           else left=backward-char right=forward-char; fi
           bindkey "^[[1;''${m}D" $left

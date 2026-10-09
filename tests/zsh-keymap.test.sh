@@ -39,7 +39,7 @@ SHIFT_ENTER_DRIVER="$TMP_ROOT/shift-enter.zsh"
 cat >"$SHIFT_ENTER_DRIVER" <<'EOF'
 zmodload zsh/zpty || exit 1
 home=$1 log=$1/probe.log last=
-zpty -b sh "HOME=${(q)home} ZDOTDIR=${(q)home} EDITOR=nvim TERM=xterm zsh -i"
+zpty -b sh "stty rows 24 cols 100; HOME=${(q)home} ZDOTDIR=${(q)home} EDITOR=nvim TERM=xterm zsh -i"
 
 # Wait until the line editor last redrew with state $1, or give up after ~10s.
 await() {
@@ -76,7 +76,7 @@ ARROW_DRIVER="$TMP_ROOT/arrows.zsh"
 cat >"$ARROW_DRIVER" <<'EOF'
 zmodload zsh/zpty || exit 1
 home=$1 table=$2 log=$1/arrows.log rc=0
-zpty -b sh "HOME=${(q)home} ZDOTDIR=${(q)home} EDITOR=nvim TERM=xterm zsh -i"
+zpty -b sh "stty rows 24 cols 100; HOME=${(q)home} ZDOTDIR=${(q)home} EDITOR=nvim TERM=xterm zsh -i"
 sleep 1
 
 # Wait ~10s for arrows.log to hold $1.
@@ -145,18 +145,19 @@ check_cursor_keys() {
   done
   pass "$profile: modified arrows and Home/End are bound to the intended widgets"
 
-  # `ab cd-ef gh`, cursor at the end (11): a word move lands on `gh` (9), a
-  # character move on `h` (10). Up replaces the line with the history entry
-  # `git status`; Down at the newest entry leaves the line alone.
+  # `ab cd-ef gh`, cursor at the end (11): Left lands on `gh` (9), or `h`
+  # (10) with Shift alone. Start Right and End at the beginning with Ctrl+A,
+  # so a missing/no-op binding cannot pass just by leaving the cursor at 11.
+  # Up replaces the line with `git status`; Down at the newest entry leaves it.
   {
     for m in {2..8}; do
-      if (( ((m - 1) & 6) != 0 )); then left=9 right=11; else left=10 right=11; fi
-      printf '%s\t%s\n' "\\e[1;${m}D" "$text|$left" "\\e[1;${m}C" "$text|$right" \
+      if (( ((m - 1) & 6) != 0 )); then left=9 right=3; else left=10 right=1; fi
+      printf '%s\t%s\n' "\\e[1;${m}D" "$text|$left" "\\x01\\e[1;${m}C" "$text|$right" \
         "\\e[1;${m}A" "git status|10" "\\e[1;${m}B" "$text|11" \
-        "\\e[1;${m}H" "$text|0" "\\e[1;${m}F" "$text|11"
+        "\\e[1;${m}H" "$text|0" "\\x01\\e[1;${m}F" "$text|11"
     done
     for seq in '\e[H' '\eOH' '\e[1~' '\e[7~'; do printf '%s\t%s\n' "$seq" "$text|0"; done
-    for seq in '\e[F' '\eOF' '\e[4~' '\e[8~'; do printf '%s\t%s\n' "$seq" "$text|11"; done
+    for seq in '\e[F' '\eOF' '\e[4~' '\e[8~'; do printf '%s\t%s\n' "\\x01$seq" "$text|11"; done
   } >"$table"
   out=$(zsh -f "$ARROW_DRIVER" "$home" "$table" 2>&1) \
     || fail "$profile: cursor keys moved wrongly or inserted text:
@@ -165,7 +166,7 @@ $out"
 }
 
 probe_profile() {
-  local profile=$1 files home out
+  local profile=$1 files home out line
   files=$(nix build --no-link --print-out-paths \
     "$ROOT#homeConfigurations.\"$profile\".config.home-files") \
     || fail "$profile: home-files build failed"
@@ -173,15 +174,20 @@ probe_profile() {
 
   home="$TMP_ROOT/$profile"
   mkdir -p "$home"
-  # The generated .zshrc hard-codes HISTFILE; keep history in the scratch HOME.
+  # Redirect HISTFILE before startup: Home Manager creates its parent as well
+  # as loading history. Appending an override would touch the real home first.
   # `_probe-state` logs the line editor state when a line starts and on every
   # redraw. It sends no keys: zsh-autosuggestions skips fetching while input
   # is queued. Suggestions are fetched synchronously so each one lands before
   # the redraw the probe sees; async results skip the pre-redraw hook.
   {
-    cat "$files/.zshrc"
+    while IFS= read -r line; do
+      case "$line" in
+        HISTFILE=*) printf '%s\n' 'HISTFILE="$HOME/.zsh_history"' ;;
+        *) printf '%s\n' "$line" ;;
+      esac
+    done <"$files/.zshrc"
     cat <<'EOF'
-HISTFILE="$HOME/.zsh_history"
 unset ZSH_AUTOSUGGEST_USE_ASYNC
 _probe-state() { print -r -- "[${BUFFER//$'\n'/<NL>}][$POSTDISPLAY]" >>"$HOME/probe.log" }
 zle -N _probe-state
@@ -190,7 +196,8 @@ add-zle-hook-widget line-init _probe-state
 add-zle-hook-widget line-pre-redraw _probe-state
 EOF
   } >"$home/.zshrc"
-  [ -e "$files/.zshenv" ] && cp -L "$files/.zshenv" "$home/.zshenv"
+  # Keymap checks need only .zshrc. Do not load .zshenv, which deliberately
+  # sources credentials outside HOME on a real devcontainer.
   printf 'git status\n' >"$home/.zsh_history"
 
   cat >>"$home/.zshrc" <<'EOF'
