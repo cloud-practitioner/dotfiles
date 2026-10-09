@@ -186,6 +186,41 @@ in
       zle -N insert-newline _insert-newline
       bindkey '^[[27;2;13~' insert-newline     # Shift+Enter as Herdr sends it to the shell
       bindkey '^[[13;2u' insert-newline        # Shift+Enter (CSI-u / kitty keyboard terminals)
+
+      # Windows-style cursor keys. Terminals (Windows Terminal, and Herdr, whose
+      # key tables encode arrows and Home/End this way) send a modified arrow as
+      # the xterm sequence ESC [ 1 ; <mod> <A-D>, with <mod> = 1 + Shift(1) +
+      # Alt(2) + Ctrl(4) + Super(8). zle has no binding for any of them, swallows
+      # ESC [ 1 and inserts the rest (";5D"), so bind them all. The Windows
+      # choices:
+      #   Ctrl or Alt + Left/Right  move by word (as WORDCHARS defines it)
+      #   Shift + Left/Right        move by character (zle has no Shift selection)
+      #   any modifier + Up/Down    the plain key (history, or a line of a multi-line buffer)
+      #   Home/End                  start/end of line; Ctrl+Home/End too
+      # ESC ESC [ <A-D> (Alt sent as an ESC prefix) and rxvt's ESC O d/c (Ctrl+Left/Right)
+      # get the same treatment.
+      () {
+        local m k left=backward-char right=forward-char
+        for m in {2..16}; do
+          # Ctrl or Alt in the modifier: by word; otherwise (Shift, Super): by character.
+          if (( (m - 1) & 6 )); then left=backward-word right=forward-word
+          else left=backward-char right=forward-char; fi
+          bindkey "^[[1;''${m}D" $left
+          bindkey "^[[1;''${m}C" $right
+          bindkey "^[[1;''${m}A" up-line-or-history
+          bindkey "^[[1;''${m}B" down-line-or-history
+          bindkey "^[[1;''${m}H" beginning-of-line
+          bindkey "^[[1;''${m}F" end-of-line
+        done
+        bindkey '^[^[[D' backward-word
+        bindkey '^[^[[C' forward-word
+        bindkey '^[^[[A' up-line-or-history
+        bindkey '^[^[[B' down-line-or-history
+        bindkey '^[Od' backward-word
+        bindkey '^[Oc' forward-word
+        for k in '^[[H' '^[OH' '^[[1~' '^[[7~'; do bindkey $k beginning-of-line; done
+        for k in '^[[F' '^[OF' '^[[4~' '^[[8~'; do bindkey $k end-of-line; done
+      }
     '' + lib.optionalString (!isWorkstation) ''
 
       # Devcontainer only. Make single-user Nix usable, including after a
