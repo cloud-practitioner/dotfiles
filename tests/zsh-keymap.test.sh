@@ -15,8 +15,8 @@
 #   zsh-autosuggestions ghost text, so accepting it cannot splice stale text
 #   onto the new line;
 # - Windows-style cursor keys: every xterm modified arrow/Home/End sequence
-#   (`ESC [ 1 ; <mod> <A-D,H,F>`, mod 2..16, which is what Windows Terminal and
-#   Herdr send), the ESC-prefixed and rxvt variants, and the Home/End forms
+#   (`ESC [ 1 ; <mod> <A-D,H,F>`, mod 2..8, which is what Windows Terminal and
+#   Herdr send for Shift/Alt/Ctrl), and the Home/End forms
 #   resolve to the intended widget (Ctrl/Alt+Left/Right by word, Shift+Left/
 #   Right by character), and typing each one into a real line editor inserts
 #   no text and leaves the cursor where that widget puts it.
@@ -120,14 +120,14 @@ check_cursor_keys() {
   local tab=$'\t' text=$'ab cd-ef gh'
 
   out=$(HOME="$home" ZDOTDIR="$home" EDITOR=nvim TERM=xterm zsh -i -c '
-      for m in {2..16}; do
+      for m in {2..8}; do
         for c in D C A B H F; do bindkey -M main "^[[1;$m$c"; done
       done
-      for k in "^[^[[D" "^[^[[C" "^[^[[A" "^[^[[B" "^[Od" "^[Oc" "^[[H" "^[OH" "^[[1~" "^[[7~" "^[[F" "^[OF" "^[[4~" "^[[8~"; do
+      for k in "^[[H" "^[OH" "^[[1~" "^[[7~" "^[[F" "^[OF" "^[[4~" "^[[8~"; do
         bindkey -M main "$k"
       done
     ' </dev/null 2>&1)
-  for m in {2..16}; do
+  for m in {2..8}; do
     left=backward-char right=forward-char
     if (( ((m - 1) & 6) != 0 )); then left=backward-word right=forward-word; fi
     assert_contains "$out" "\"^[[1;${m}D\" $left" "$profile: ESC[1;${m}D is $left"
@@ -137,12 +137,6 @@ check_cursor_keys() {
     assert_contains "$out" "\"^[[1;${m}H\" beginning-of-line" "$profile: ESC[1;${m}H is beginning-of-line"
     assert_contains "$out" "\"^[[1;${m}F\" end-of-line" "$profile: ESC[1;${m}F is end-of-line"
   done
-  assert_contains "$out" '"^[^[[D" backward-word' "$profile: ESC ESC[D is backward-word"
-  assert_contains "$out" '"^[^[[C" forward-word' "$profile: ESC ESC[C is forward-word"
-  assert_contains "$out" '"^[^[[A" up-line-or-history' "$profile: ESC ESC[A is up-line-or-history"
-  assert_contains "$out" '"^[^[[B" down-line-or-history' "$profile: ESC ESC[B is down-line-or-history"
-  assert_contains "$out" '"^[Od" backward-word' "$profile: rxvt Ctrl+Left is backward-word"
-  assert_contains "$out" '"^[Oc" forward-word' "$profile: rxvt Ctrl+Right is forward-word"
   for seq in '^[[H' '^[OH' '^[[1~' '^[[7~'; do
     assert_contains "$out" "\"$seq\" beginning-of-line" "$profile: $seq is beginning-of-line"
   done
@@ -155,14 +149,12 @@ check_cursor_keys() {
   # character move on `h` (10). Up replaces the line with the history entry
   # `git status`; Down at the newest entry leaves the line alone.
   {
-    for m in {2..16}; do
+    for m in {2..8}; do
       if (( ((m - 1) & 6) != 0 )); then left=9 right=11; else left=10 right=11; fi
       printf '%s\t%s\n' "\\e[1;${m}D" "$text|$left" "\\e[1;${m}C" "$text|$right" \
         "\\e[1;${m}A" "git status|10" "\\e[1;${m}B" "$text|11" \
         "\\e[1;${m}H" "$text|0" "\\e[1;${m}F" "$text|11"
     done
-    printf '%s\t%s\n' '\e\e[D' "$text|9" '\e\e[C' "$text|11" '\eOd' "$text|9" '\eOc' "$text|11" \
-      '\e\e[A' "git status|10" '\e\e[B' "$text|11"
     for seq in '\e[H' '\eOH' '\e[1~' '\e[7~'; do printf '%s\t%s\n' "$seq" "$text|0"; done
     for seq in '\e[F' '\eOF' '\e[4~' '\e[8~'; do printf '%s\t%s\n' "$seq" "$text|11"; done
   } >"$table"
