@@ -16,7 +16,16 @@
 # - both profiles: the global git config sets useConfigOnly, pushes over SSH
 #   for github.com and bitbucket.org, includes the rendered identity rules
 #   last, and has no folder (gitdir:) rules, insteadOf, or gpg section;
-# - container: no ~/.ssh/config is generated.
+# - container: ~/.ssh/config keeps the four `*` defaults the devcontainer image
+#   used to write and includes ~/.ssh/config.d/* then the pinned forge host
+#   keys; ssh/pinned_known_hosts holds every key type GitHub and Bitbucket
+#   publish (checked against their documented fingerprints); plain ssh and
+#   git's `ssh -F ~/.ssh/config.d/identities`, including a legacy alias, both
+#   verify github.com and bitbucket.org only against that read-only file with
+#   StrictHostKeyChecking yes, other hosts keep accept-new in the writable
+#   ~/.ssh/known_hosts; the activation step makes ~/.ssh and ~/.ssh/config.d
+#   mode 700 from nothing and from a loose directory; the workstation gets
+#   none of it.
 #
 # Nix evaluates the flake from Git, so new files must be tracked (`git add`).
 set -u
@@ -148,8 +157,110 @@ for profile in "$WS" "$CT"; do
 done
 
 ct_files=$(home_files "$CT")
-[ ! -e "$ct_files/.ssh/config" ] || fail "$CT: no ~/.ssh/config is generated"
-pass "$CT: no ~/.ssh/config is generated"
+ws_has_pinned=
+for f in pinned-hosts.conf pinned_known_hosts; do
+  [ ! -e "$ws_files/.ssh/$f" ] || ws_has_pinned=1
+done
+[ -z "$ws_has_pinned" ] || fail "$WS: no pinned host key files"
+ws_activation=$(nix eval --json "$ROOT#homeConfigurations.\"$WS\".config.home.activation" --apply 'a: builtins.hasAttr "sshDirs" a') \
+  || fail "$WS: activation evaluates"
+[ "$ws_activation" = false ] || fail "$WS: no ~/.ssh directory activation"
+pass "$WS: gets no pinned host keys or ~/.ssh directory activation"
+
+# Container: ~/.ssh/config, the pinned keys, and both ways ssh reads them. A
+# scratch HOME stands in for /home/node: ssh expands `~` from the passwd entry,
+# so rewrite it, and the absolute home Home Manager renders, to the scratch one.
+CH="$TMP_ROOT/chome"
+mkdir -p "$CH/.config/dotfiles/pub"
+mkdir -m 700 "$CH/.ssh"
+cp "$H/.config/dotfiles/identity.env" "$CH/.config/dotfiles/identity.env"
+chmod 600 "$CH/.config/dotfiles/identity.env"
+for f in config pinned-hosts.conf; do
+  [ -e "$ct_files/.ssh/$f" ] || fail "$CT: ~/.ssh/$f is generated"
+  sed -e "s|~/|$CH/|g" -e "s|/home/node/|$CH/|g" "$ct_files/.ssh/$f" >"$CH/.ssh/$f"
+done
+cp "$ct_files/.ssh/pinned_known_hosts" "$CH/.ssh/pinned_known_hosts"
+env -i HOME="$CH" PATH="$PATH" bash "$ROOT/activation/identity.sh" render container >/dev/null 2>&1
+identities="$CH/.ssh/config.d/identities"
+[ -f "$identities" ] || fail "$CT: identity render wrote ~/.ssh/config.d/identities"
+[ "$(stat -c %a "$CH/.ssh" "$CH/.ssh/config.d" "$identities" | tr '\n' ' ')" = '700 700 600 ' ] \
+  || fail "$CT: identity render keeps ~/.ssh and config.d at 700 and the file at 600"
+printf 'Match all\nInclude %s\n' "\"$CH/.ssh/pinned-hosts.conf\"" >"$TMP_ROOT/identities.tail"
+[ "$(tail -n 2 "$identities")" = "$(cat "$TMP_ROOT/identities.tail")" ] \
+  || fail "$CT: the identities file ends by including the pinned host keys"
+# shellcheck disable=SC2088 # the config holds a literal tilde
+[ "$(grep '^Include' "$ct_files/.ssh/config")" = 'Include ~/.ssh/config.d/* ~/.ssh/pinned-hosts.conf' ] \
+  || fail "$CT: ~/.ssh/config includes config.d/* and then the pinned host keys"
+
+# The Host * defaults the devcontainer image's static file had, nothing else.
+cat >"$CH/image_defaults" <<EOT
+Host *
+  AddKeysToAgent yes
+  StrictHostKeyChecking accept-new
+  ServerAliveInterval 60
+  UserKnownHostsFile $CH/.ssh/known_hosts
+EOT
+other=$(ssh -G -F "$CH/.ssh/config" unpinned.example 2>/dev/null) || fail "$CT: ssh -G unpinned.example failed"
+image=$(ssh -G -F "$CH/image_defaults" unpinned.example 2>/dev/null) || fail "image defaults fixture resolves"
+for key in addkeystoagent stricthostkeychecking serveraliveinterval userknownhostsfile globalknownhostsfile updatehostkeys compression forwardagent hashknownhosts controlmaster; do
+  [ "$(ssh_value "$key" "$other")" = "$(ssh_value "$key" "$image")" ] || fail "$CT: $key matches the image's defaults"
+done
+pass "$CT: ~/.ssh/config keeps the image's Host * defaults for other hosts"
+
+for spec in "$CH/.ssh/config:plain ssh" "$identities:git's ssh -F identities"; do
+  cfg=${spec%%:*} via=${spec#*:}
+  for host in github.com bitbucket.org github.com-work; do
+    resolved=$(ssh -G -F "$cfg" "$host" 2>/dev/null) || fail "$CT: $via: ssh -G $host failed"
+    case "$host" in
+      github.com-work) [ "$(ssh_value hostname)" = github.com ] || fail "$CT: $via: the alias resolves to github.com" ;;
+    esac
+    [ "$(ssh_value stricthostkeychecking)" = true ] || fail "$CT: $via: $host is checked with StrictHostKeyChecking yes"
+    [ "$(ssh_value userknownhostsfile)" = "$CH/.ssh/pinned_known_hosts" ] || fail "$CT: $via: $host reads only the pinned file"
+    [ "$(ssh_value globalknownhostsfile)" = none ] || fail "$CT: $via: $host ignores the system known_hosts"
+    [ "$(ssh_value updatehostkeys)" = false ] || fail "$CT: $via: $host never rewrites the pinned file"
+  done
+  resolved=$(ssh -G -F "$cfg" unpinned.example 2>/dev/null) || fail "$CT: $via: ssh -G unpinned.example failed"
+  if [ "$cfg" = "$CH/.ssh/config" ]; then
+    [ "$(ssh_value stricthostkeychecking)" = accept-new ] || fail "$CT: $via: other hosts keep accept-new"
+    [ "$(ssh_value userknownhostsfile)" = "$CH/.ssh/known_hosts" ] || fail "$CT: $via: other hosts use the writable known_hosts"
+  fi
+  pass "$CT: $via verifies github.com, bitbucket.org and the github alias against the pinned keys only"
+done
+
+# What the pinned file holds: every key type each forge publishes, matching the
+# fingerprints documented by GitHub and Atlassian.
+pinned="$CH/.ssh/pinned_known_hosts"
+fingerprints=$(ssh-keygen -l -f "$pinned" | awk '{print $3, $4, $2}' | sort)
+expected=$(sort <<'EOT'
+bitbucket.org (ECDSA) SHA256:FC73VB6C4OQLSCrjEayhMp9UMxS97caD/Yyi2bhW/J0
+bitbucket.org (ED25519) SHA256:ybgmFkzwOSotHTHLJgHO0QN8L0xErw6vd0VhFA9m3SM
+bitbucket.org (RSA) SHA256:46OSHA1Rmj8E8ERTC6xkNcmGOw9oFxYr0WF6zWW8l1E
+github.com (ECDSA) SHA256:p2QAMXNIC1TJYWeIOttrVc98/R1BUFWu3/LiyKgUfQM
+github.com (ED25519) SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU
+github.com (RSA) SHA256:uNiVztksCsDhcc0u9e8BujQXVUpKZIDTMczCvj3tD2s
+EOT
+)
+[ "$fingerprints" = "$expected" ] || fail "$CT: pinned_known_hosts holds exactly the published GitHub and Bitbucket keys, got: $fingerprints"
+for host in github.com bitbucket.org; do
+  [ "$(ssh-keygen -F "$host" -f "$pinned" | grep -c ' ssh-\| ecdsa-')" = 3 ] || fail "$CT: ssh-keygen -F finds three $host keys"
+done
+[ ! -e "$CH/.ssh/known_hosts" ] || fail "$CT: no known_hosts is created or linked"
+[ -L "$ct_files/.ssh/pinned_known_hosts" ] && [ ! -e "$ct_files/.ssh/known_hosts" ] || fail "$CT: only the pinned file is linked; ~/.ssh/known_hosts stays writable"
+pass "$CT: pinned_known_hosts holds the published keys; ~/.ssh/known_hosts is left alone"
+
+# The activation step: a missing ~/.ssh (the image without its own ssh files) and
+# a loose one both end at 700, config.d included.
+step=$(nix eval --raw "$ROOT#homeConfigurations.\"$CT\".config.home.activation.sshDirs.data") \
+  || fail "$CT: ssh directory activation evaluates"
+run() { "$@"; }
+for start in missing loose; do
+  AH="$TMP_ROOT/ahome-$start"
+  mkdir -p "$AH"
+  [ "$start" = missing ] || { mkdir -p "$AH/.ssh/config.d" && chmod 755 "$AH/.ssh" "$AH/.ssh/config.d"; }
+  (HOME="$AH" eval "$step") || fail "$CT: ssh directory activation ran ($start)"
+  [ "$(stat -c %a "$AH/.ssh" "$AH/.ssh/config.d" | tr '\n' ' ')" = '700 700 ' ] || fail "$CT: ~/.ssh and ~/.ssh/config.d are 700 from a $start start"
+done
+pass "$CT: activation leaves ~/.ssh and ~/.ssh/config.d at mode 700"
 
 DARWIN="$ROOT#darwinConfigurations.mac.config.home-manager.users.dev"
 unchanged=$(nix eval --json "$DARWIN" --apply 'c:

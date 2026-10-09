@@ -245,7 +245,7 @@ not from the folder it sits in:
   `ssh://git@alias/owner/**` when you set a legacy SSH alias), each pointing at
   `~/.config/git/identity/<label>.gitconfig`: `user.name`,
   `user.email`, and `core.sshCommand = ssh -i '<key>' -o IdentitiesOnly=yes`
-  (with `-F ~/.ssh/config.d/identities` in the container so legacy aliases resolve).
+  (with `-F ~/.ssh/config.d/identities` in the container, so legacy aliases resolve and the pinned host keys apply).
 - `programs.git` itself sets `user.useConfigOnly = true` (a repo whose owner
   matches no identity **refuses the commit** instead of guessing one) and includes
   the rendered file. `pushInsteadOf` sends pushes for plain `https://github.com/`
@@ -332,6 +332,35 @@ alias, the global git config, and that no profile evaluates with a Home Manager
 warning; `bash tests/ssh-agent-autoload.test.sh` checks the key autoload and the
 missing-`identity.env` line.
 
+#### SSH in the container profile
+
+The `container` profile also writes `~/.ssh/config` (it used to be a static file the
+devcontainer image wrote): `Include ~/.ssh/config.d/*` and the `*` defaults
+`AddKeysToAgent yes`, `StrictHostKeyChecking accept-new`, `ServerAliveInterval 60`,
+and `UserKnownHostsFile ~/.ssh/known_hosts`. It has no keys of its own: the agent
+is the workstation's, and the rendered `~/.ssh/config.d/identities` holds only the
+optional aliases.
+
+The official host keys of `github.com` and `bitbucket.org` are committed in
+`ssh/pinned_known_hosts` (every key type each forge publishes, with the source and
+fingerprints in the file's comments) and linked read-only as
+`~/.ssh/pinned_known_hosts`; the image no longer needs `ssh-keyscan`. For those two
+hosts, `~/.ssh/pinned-hosts.conf` makes that file the only one consulted and sets
+`StrictHostKeyChecking yes`: with the keys pinned there is nothing to trust on first
+use, and a changed or unlisted key fails closed instead of being learned. It
+matches on the target hostname, so legacy aliases are covered, and it is included
+from `~/.ssh/config` and from the end of `~/.ssh/config.d/identities`, because git's
+`core.sshCommand` runs `ssh -F ~/.ssh/config.d/identities`, which never reads
+`~/.ssh/config`. Every other host keeps `accept-new` and the writable
+`~/.ssh/known_hosts`, which this repo never links or replaces. When a forge rotates
+a host key, update `ssh/pinned_known_hosts` from the sources named there; until then
+SSH to it refuses with a host-key error.
+
+The switch also makes `~/.ssh` and `~/.ssh/config.d` mode 700. If an older image
+already wrote `~/.ssh/config`, a switch with `-b backup` (what the devcontainer's
+`post-create.sh` runs) moves it aside as `~/.ssh/config.backup`; without `-b` the
+switch stops on the collision.
+
 ### Secrets (Linux)
 
 Nix doesn't manage secrets, but every zsh on Linux, including non-interactive
@@ -355,8 +384,10 @@ name order, silently. The rules:
 
 `home.nix` takes a `profile` argument. The `container` profile reuses everything
 (zsh, starship, packages, tools) but drops the host SSH machinery - no agent
-service, no `~/.ssh/config`, no startup key loading - because a container has no
-systemd and uses the forwarded workstation agent instead. Identity sharing
+service, no startup key loading, no host aliases - because a container has no
+systemd and uses the forwarded workstation agent instead. It keeps a small
+`~/.ssh/config` with the pinned GitHub and Bitbucket host keys, see
+[SSH in the container profile](#ssh-in-the-container-profile). Identity sharing
 requires the workstation's `~/.config/dotfiles` mounted read-only at the same
 home-relative path in the container, plus the agent socket exposed through
 `SSH_AUTH_SOCK`. This directory contains the non-secret identity file and the
@@ -468,7 +499,7 @@ If you don't use it, just remove it from `brews` in your copy.
 - `flake.nix` - the entry point.
   Wires up nixpkgs, nix-darwin, home-manager, and nix-homebrew, declares the `mac` machine, and generates the Linux home-manager configs (workstation + `container` profiles for each user in `containerUsers`).
 - `configuration.nix` - system-level config: macOS defaults, Homebrew.
-- `home.nix` - user-level config: shell, packages, prompt, git, SSH (workstation profile), and the symlinks described below. Takes a `profile` argument (`workstation` or `container`).
+- `home.nix` - user-level config: shell, packages, prompt, git, SSH, and the symlinks described below. Takes a `profile` argument (`workstation` or `container`).
 - `tools/node-tools.sh` - installs, at every Linux switch, the pnpm and npm global tools and the agent skills (plus nvm, Node.js, and pnpm on the WSL2 workstation).
 - `tools/bash-tools.sh` - installs herdr, Claude Code, Pi, the Copilot CLI, and Antigravity from their own installers at every Linux switch.
 - `identity.env.example` and `activation/identity.sh` - the template for your git and SSH identities, and the renderer and checker that apply it.

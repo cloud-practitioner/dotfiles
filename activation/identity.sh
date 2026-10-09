@@ -17,7 +17,8 @@
 # outputs are removed when identity.env goes away; applied-rev is independent:
 #   ~/.config/git/identities.gitconfig   includeIf rules
 #   ~/.config/git/identity/<label>.gitconfig
-#   ~/.ssh/config.d/identities                                legacy aliases
+#   ~/.ssh/config.d/identities                                legacy aliases (container:
+#                    ends with an Include of the pinned forge host keys)
 #   workstation only, in the identity directory:
 #     pub/<label>.pub  public halves of the keys
 #     ssh-keys         private key paths, one per line, for the zsh agent autoload
@@ -189,6 +190,12 @@ render() {
     [ -n "$a" ] && ssh+=$'\n'"Host $a"$'\n'"  HostName $h"$'\n'"  User git"$'\n'"  IdentityFile $(git_quote "$key")"$'\n'"  IdentitiesOnly yes"
     keys+=${keys:+$'\n'}$(expand "${V[${l}_KEY]}")
   done
+  # Git's ssh runs with -F on this file alone (container), so it never reads
+  # ~/.ssh/config. Last, so the pinned forge host keys that home.nix links
+  # (~/.ssh/pinned-hosts.conf) match the host an alias above resolves to.
+  # `Match all` ends the last alias block: an include under an inactive Host
+  # block never matches anything.
+  [ "$profile" = workstation ] || ssh+=$'\n'"Match all"$'\n'"Include $(git_quote "$HOME/.ssh/pinned-hosts.conf")"
   prune "$GIT_OUT/identity" .gitconfig "${LABELS[@]}"
   write_if_changed "$GIT_OUT/identities.gitconfig" "$rules"
   if [ ! -d "$HOME/.ssh" ]; then mkdir -m 700 "$HOME/.ssh" 2>/dev/null; fi
