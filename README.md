@@ -384,9 +384,11 @@ echo 'github.com ssh-ed25519 AAAA...the-new-key' >> ~/.ssh/known_hosts
 
 Both plain `ssh` and git (including legacy aliases) read that file in addition to the
 pinned one, so it takes effect at once; a `@revoked` key stays refused. To make the
-fix permanent, update `ssh/pinned_known_hosts` from the same sources, then `hm-update`
-in the workstation and the container. `bash tests/ssh-config.test.sh` proves the
-override against a local `sshd` with a throwaway host key.
+fix permanent, update `ssh/pinned_known_hosts` from the same sources, commit the
+change, and run `./rebuild.sh` on the workstation. Once that committed revision is
+available on `origin`, run `hm-update` in the container to follow it.
+`bash tests/ssh-config.test.sh` proves the override against a local `sshd` with a
+throwaway host key.
 
 ### Secrets (Linux)
 

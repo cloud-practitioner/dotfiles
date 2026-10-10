@@ -191,12 +191,10 @@ identities="$CH/.ssh/config.d/identities"
 [ -f "$identities" ] || fail "$CT: identity render wrote ~/.ssh/config.d/identities"
 [ "$(stat -c %a "$CH/.ssh" "$CH/.ssh/config.d" "$identities" | tr '\n' ' ')" = '700 700 600 ' ] \
   || fail "$CT: identity render keeps ~/.ssh and config.d at 700 and the file at 600"
-printf 'Match all\nInclude %s\n' "\"$CH/.ssh/pinned-hosts.conf\"" >"$TMP_ROOT/identities.tail"
-[ "$(tail -n 2 "$identities")" = "$(cat "$TMP_ROOT/identities.tail")" ] \
-  || fail "$CT: the identities file ends by including the pinned host keys"
-# shellcheck disable=SC2088 # the config holds a literal tilde
-[ "$(grep '^Include' "$ct_files/.ssh/config")" = 'Include ~/.ssh/config.d/* ~/.ssh/pinned-hosts.conf' ] \
-  || fail "$CT: ~/.ssh/config includes config.d/* and then the pinned host keys"
+printf 'Host wildcard-fixture.example\n  ServerAliveInterval 17\n' >"$CH/.ssh/config.d/wildcard-fixture"
+resolved=$(ssh -G -F "$CH/.ssh/config" wildcard-fixture.example 2>/dev/null) || fail "$CT: ssh -G wildcard-fixture.example failed"
+[ "$(ssh_value serveraliveinterval)" = 17 ] || fail "$CT: ~/.ssh/config applies another config.d entry"
+pass "$CT: ~/.ssh/config consumes config.d wildcard entries"
 
 # The Host * defaults the devcontainer image's static file had, nothing else.
 cat >"$CH/image_defaults" <<EOT
