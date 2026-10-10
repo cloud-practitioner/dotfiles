@@ -21,9 +21,14 @@
 #   keys; ssh/pinned_known_hosts holds every key type GitHub and Bitbucket
 #   publish (checked against their documented fingerprints); plain ssh and
 #   git's `ssh -F ~/.ssh/config.d/identities`, including a legacy alias, both
-#   verify github.com and bitbucket.org only against that read-only file with
-#   StrictHostKeyChecking yes, other hosts keep accept-new in the writable
-#   ~/.ssh/known_hosts; the activation step makes ~/.ssh and ~/.ssh/config.d
+#   verify github.com and bitbucket.org with StrictHostKeyChecking yes against
+#   ~/.ssh/known_hosts and that read-only file only, other hosts keep
+#   accept-new in the writable ~/.ssh/known_hosts; GitHub's leaked pre-2023
+#   RSA key is pinned @revoked; against a local sshd with a throwaway host
+#   key, a key the pins do not know is refused by plain ssh and by git's ssh,
+#   appending it to ~/.ssh/known_hosts (the documented rotation override)
+#   accepts it for both, and a @revoked key is refused even then; the
+#   activation step makes ~/.ssh and ~/.ssh/config.d
 #   mode 700 from nothing and from a loose directory; the workstation gets
 #   none of it.
 #
@@ -180,6 +185,7 @@ for f in config pinned-hosts.conf; do
   sed -e "s|~/|$CH/|g" -e "s|/home/node/|$CH/|g" "$ct_files/.ssh/$f" >"$CH/.ssh/$f"
 done
 cp "$ct_files/.ssh/pinned_known_hosts" "$CH/.ssh/pinned_known_hosts"
+chmod u+w "$CH/.ssh/pinned_known_hosts" # the store copy is read-only; the revoked-key test edits this one
 env -i HOME="$CH" PATH="$PATH" bash "$ROOT/activation/identity.sh" render container >/dev/null 2>&1
 identities="$CH/.ssh/config.d/identities"
 [ -f "$identities" ] || fail "$CT: identity render wrote ~/.ssh/config.d/identities"
@@ -215,7 +221,7 @@ for spec in "$CH/.ssh/config:plain ssh" "$identities:git's ssh -F identities"; d
       github.com-work) [ "$(ssh_value hostname)" = github.com ] || fail "$CT: $via: the alias resolves to github.com" ;;
     esac
     [ "$(ssh_value stricthostkeychecking)" = true ] || fail "$CT: $via: $host is checked with StrictHostKeyChecking yes"
-    [ "$(ssh_value userknownhostsfile)" = "$CH/.ssh/pinned_known_hosts" ] || fail "$CT: $via: $host reads only the pinned file"
+    [ "$(ssh_value userknownhostsfile)" = "$CH/.ssh/known_hosts $CH/.ssh/pinned_known_hosts" ] || fail "$CT: $via: $host reads known_hosts and the pinned file"
     [ "$(ssh_value globalknownhostsfile)" = none ] || fail "$CT: $via: $host ignores the system known_hosts"
     [ "$(ssh_value updatehostkeys)" = false ] || fail "$CT: $via: $host never rewrites the pinned file"
   done
@@ -224,7 +230,7 @@ for spec in "$CH/.ssh/config:plain ssh" "$identities:git's ssh -F identities"; d
     [ "$(ssh_value stricthostkeychecking)" = accept-new ] || fail "$CT: $via: other hosts keep accept-new"
     [ "$(ssh_value userknownhostsfile)" = "$CH/.ssh/known_hosts" ] || fail "$CT: $via: other hosts use the writable known_hosts"
   fi
-  pass "$CT: $via verifies github.com, bitbucket.org and the github alias against the pinned keys only"
+  pass "$CT: $via verifies github.com, bitbucket.org and the github alias strictly against known_hosts and the pinned keys"
 done
 
 # What the pinned file holds: every key type each forge publishes, matching the
@@ -242,11 +248,102 @@ EOT
 )
 [ "$fingerprints" = "$expected" ] || fail "$CT: pinned_known_hosts holds exactly the published GitHub and Bitbucket keys, got: $fingerprints"
 for host in github.com bitbucket.org; do
-  [ "$(ssh-keygen -F "$host" -f "$pinned" | grep -c ' ssh-\| ecdsa-')" = 3 ] || fail "$CT: ssh-keygen -F finds three $host keys"
+  [ "$(ssh-keygen -F "$host" -f "$pinned" | grep -v -e '^#' -e '^@revoked' | grep -c ' ssh-\| ecdsa-')" = 3 ] || fail "$CT: ssh-keygen -F finds three $host keys"
 done
+# GitHub's former RSA host key (exposed and replaced on 2023-03-24) is pinned
+# @revoked, on GitHub's line only, so no known_hosts file can make it trusted.
+revoked=$(grep '^@revoked ' "$pinned")
+[ "$(grep -c . <<<"$revoked")" = 1 ] || fail "$CT: exactly one key is revoked"
+printf '%s\n' "${revoked#@revoked }" >"$TMP_ROOT/revoked.key"
+[ "$(ssh-keygen -lf "$TMP_ROOT/revoked.key" | awk '{print $2, $3}')" = 'SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8 github.com' ] \
+  || fail "$CT: the revoked key is GitHub's former RSA host key"
+[ "$(ssh-keygen -F github.com -f "$pinned" | grep -c '^@revoked github.com ssh-rsa ')" = 1 ] || fail "$CT: ssh-keygen -F reports the revoked GitHub key"
 [ ! -e "$CH/.ssh/known_hosts" ] || fail "$CT: no known_hosts is created or linked"
 [ -L "$ct_files/.ssh/pinned_known_hosts" ] && [ ! -e "$ct_files/.ssh/known_hosts" ] || fail "$CT: only the pinned file is linked; ~/.ssh/known_hosts stays writable"
 pass "$CT: pinned_known_hosts holds the published keys; ~/.ssh/known_hosts is left alone"
+
+# Behaviour against a real sshd on loopback with a throwaway host key standing
+# in for a forge key the pins do not know (a rotation). The pinned names are
+# reached through a ProxyCommand that dials the local sshd, so the generated
+# config and the rendered core.sshCommand are used exactly as written. No
+# network, no real key: authentication is expected to fail, which is how a
+# test tells "host key accepted" from "Host key verification failed".
+SSHD=
+for out in $(nix build --no-link --print-out-paths --inputs-from "$ROOT" nixpkgs#openssh); do
+  [ -x "$out/bin/sshd" ] && SSHD=$out/bin/sshd
+done
+[ -n "$SSHD" ] || fail "OpenSSH sshd for the host-key test is available"
+SD="$TMP_ROOT/sshd"
+mkdir -p "$SD"
+ssh-keygen -q -t ed25519 -N '' -C throwaway-forge -f "$SD/host" || fail "throwaway host key generated"
+port=
+for _ in $(seq 1 50); do
+  candidate=$((20000 + RANDOM % 30000))
+  (exec 3<>"/dev/tcp/127.0.0.1/$candidate") 2>/dev/null || { port=$candidate; break; }
+done
+[ -n "$port" ] || fail "a free loopback port for the throwaway sshd"
+printf 'Port %s\nListenAddress 127.0.0.1\nHostKey %s\nPidFile none\nUsePAM no\nPasswordAuthentication no\nAuthorizedKeysFile none\nStrictModes no\n' \
+  "$port" "$SD/host" >"$SD/sshd_config"
+"$SSHD" -D -e -f "$SD/sshd_config" >"$SD/sshd.log" 2>&1 &
+SSHD_PID=$!
+trap 'kill "$SSHD_PID" 2>/dev/null; dotfiles_test_cleanup' EXIT
+for _ in $(seq 1 50); do
+  (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && break
+  sleep 0.1
+done
+cat >"$SD/dial" <<EOT
+#!/usr/bin/env bash
+exec 3<>/dev/tcp/127.0.0.1/$port
+cat <&3 &
+cat >&3
+kill \$! 2>/dev/null
+EOT
+chmod +x "$SD/dial"
+forge_key="$(cut -d' ' -f1,2 "$SD/host.pub")"
+ssh_plain() { env -i HOME="$CH" PATH="$PATH" ssh -F "$CH/.ssh/config" -o ProxyCommand="$SD/dial" -o BatchMode=yes -T "git@$1" 2>&1; }
+git_ssh() { # remote URL
+  local cmd
+  cmd=$(git config --file "$CH/.config/git/identity/gh_work.gitconfig" core.sshCommand) || fail "$CT: rendered core.sshCommand"
+  env -i HOME="$CH" XDG_CONFIG_HOME="$CH/.config" GIT_CONFIG_NOSYSTEM=1 PATH="$PATH" \
+    git -c core.sshCommand="$cmd -o ProxyCommand=$SD/dial -o BatchMode=yes" ls-remote "$1" 2>&1
+}
+expect_refused() { # description, output
+  case "$2" in *"Host key verification failed"*) ;; *) fail "$1: expected a refusal, got: $2" ;; esac
+}
+expect_accepted() {
+  case "$2" in *"Permission denied"*) ;; *) fail "$1: expected the host key to be accepted and authentication to fail, got: $2" ;; esac
+  case "$2" in *"Host key verification failed"* | *REVOKED*) fail "$1: host key accepted without a refusal, got: $2" ;; esac
+}
+for target in "plain ssh:ssh_plain github.com" "plain ssh:ssh_plain bitbucket.org" "plain ssh via the alias:ssh_plain github.com-work" \
+  "git:git_ssh git@github.com:work-org/x.git" "git via the alias:git_ssh git@github.com-work:work-org/x.git" "git on Bitbucket:git_ssh git@bitbucket.org:work-space/x.git"; do
+  expect_refused "$CT: ${target%%:*} refuses a key the pins do not know (${target#*:})" "$(${target#*:})"
+done
+for host in github.com bitbucket.org; do
+  # The documented rotation override: append the new official key to ~/.ssh/known_hosts.
+  rm -f "$CH/.ssh/known_hosts"
+  printf '%s %s\n' "$host" "$forge_key" >>"$CH/.ssh/known_hosts"
+  expect_accepted "$CT: plain ssh accepts a rotated $host key from ~/.ssh/known_hosts" "$(ssh_plain "$host")"
+done
+printf 'github.com %s\n' "$forge_key" >"$CH/.ssh/known_hosts"
+expect_accepted "$CT: plain ssh via the alias accepts the override" "$(ssh_plain github.com-work)"
+expect_accepted "$CT: git accepts the override" "$(git_ssh git@github.com:work-org/x.git)"
+expect_accepted "$CT: git via the alias accepts the override" "$(git_ssh git@github.com-work:work-org/x.git)"
+printf 'bitbucket.org %s\n' "$forge_key" >"$CH/.ssh/known_hosts"
+expect_accepted "$CT: git accepts the override on Bitbucket" "$(git_ssh git@bitbucket.org:work-space/x.git)"
+# The override is per host: GitHub's entry does not vouch for Bitbucket and vice versa.
+expect_refused "$CT: the Bitbucket override does not cover GitHub" "$(ssh_plain github.com)"
+# A @revoked key is never accepted, even when known_hosts also lists it normally.
+cp "$pinned" "$TMP_ROOT/pinned.orig"
+printf '@revoked github.com %s\n' "$forge_key" >>"$pinned"
+printf 'github.com %s\n' "$forge_key" >"$CH/.ssh/known_hosts"
+for out in "$(ssh_plain github.com)" "$(git_ssh git@github.com:work-org/x.git)"; do
+  case "$out" in *REVOKED*) ;; *) fail "$CT: a @revoked key is reported as revoked, got: $out" ;; esac
+  expect_refused "$CT: a @revoked key is refused despite a known_hosts entry" "$out"
+done
+cp "$TMP_ROOT/pinned.orig" "$pinned"
+rm -f "$CH/.ssh/known_hosts"
+kill "$SSHD_PID" 2>/dev/null
+pass "$CT: an unknown forge key is refused, ~/.ssh/known_hosts overrides it for plain ssh and git, @revoked stays refused"
 
 # The activation step: a missing ~/.ssh (the image without its own ssh files) and
 # a loose one both end at 700, config.d included.

@@ -344,22 +344,49 @@ optional aliases.
 The official host keys of `github.com` and `bitbucket.org` are committed in
 `ssh/pinned_known_hosts` (every key type each forge publishes, with the source and
 fingerprints in the file's comments) and linked read-only as
-`~/.ssh/pinned_known_hosts`; the image no longer needs `ssh-keyscan`. For those two
-hosts, `~/.ssh/pinned-hosts.conf` makes that file the only one consulted and sets
-`StrictHostKeyChecking yes`: with the keys pinned there is nothing to trust on first
-use, and a changed or unlisted key fails closed instead of being learned. It
-matches on the target hostname, so legacy aliases are covered, and it is included
-from `~/.ssh/config` and from the end of `~/.ssh/config.d/identities`, because git's
-`core.sshCommand` runs `ssh -F ~/.ssh/config.d/identities`, which never reads
-`~/.ssh/config`. Every other host keeps `accept-new` and the writable
-`~/.ssh/known_hosts`, which this repo never links or replaces. When a forge rotates
-a host key, update `ssh/pinned_known_hosts` from the sources named there; until then
-SSH to it refuses with a host-key error.
+`~/.ssh/pinned_known_hosts`; the image no longer needs `ssh-keyscan`. GitHub's former
+RSA key, exposed and replaced on 2023-03-24, is pinned as `@revoked` so it can never
+be accepted from any known_hosts file. For those two hosts,
+`~/.ssh/pinned-hosts.conf` sets `StrictHostKeyChecking yes` and reads only
+`~/.ssh/known_hosts` and the pinned file: with the keys pinned there is nothing to
+trust on first use, and an unknown key is refused instead of learned. A stale
+entry an old image's `ssh-keyscan` left in `~/.ssh/known_hosts` is still accepted
+there, as before; the pin protects fresh containers. The file matches on the target
+hostname, so legacy aliases are covered, and it is included from `~/.ssh/config`
+and from the end of `~/.ssh/config.d/identities`, because git's `core.sshCommand`
+runs `ssh -F ~/.ssh/config.d/identities`, which never reads `~/.ssh/config`. Every
+other host keeps `accept-new` and the writable `~/.ssh/known_hosts`, which this
+repo never links or replaces. `activation/identity.sh check container` (run at
+every switch) offline-checks that both forges still have a pinned key.
 
 The switch also makes `~/.ssh` and `~/.ssh/config.d` mode 700. If an older image
 already wrote `~/.ssh/config`, a switch with `-b backup` (what the devcontainer's
 `post-create.sh` runs) moves it aside as `~/.ssh/config.backup`; without `-b` the
 switch stops on the collision.
+
+##### Host key changed
+
+If `git push`, `git fetch` or `ssh -T git@github.com` over SSH suddenly fails in the
+container with `WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!` or `Host key
+verification failed`, the forge may have rotated a host key (HTTPS is unaffected).
+Do not run `ssh-keyscan`: first compare the fingerprint of the new key with the
+forge's official page,
+[GitHub's SSH key fingerprints](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints)
+or Atlassian's
+[Bitbucket host keys](https://support.atlassian.com/bitbucket-cloud/docs/configure-ssh-and-two-step-verification/)
+(`curl -s https://api.github.com/meta` and `curl -s https://bitbucket.org/site/ssh`
+print the keys themselves). Then add the new key to the writable file, with no
+rebuild:
+
+```sh
+echo 'github.com ssh-ed25519 AAAA...the-new-key' >> ~/.ssh/known_hosts
+```
+
+Both plain `ssh` and git (including legacy aliases) read that file in addition to the
+pinned one, so it takes effect at once; a `@revoked` key stays refused. To make the
+fix permanent, update `ssh/pinned_known_hosts` from the same sources, then `hm-update`
+in the workstation and the container. `bash tests/ssh-config.test.sh` proves the
+override against a local `sshd` with a throwaway host key.
 
 ### Secrets (Linux)
 

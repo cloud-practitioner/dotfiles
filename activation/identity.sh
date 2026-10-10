@@ -5,6 +5,7 @@
 #
 #   identity.sh render workstation|container   # activation: render + check, never fails
 #   identity.sh check  workstation|container   # doctor: check only, exit 1 on problems
+#                                              # (container: also that the pinned forge host keys are linked)
 #
 # Inputs (non-secret):
 #   ~/.config/dotfiles
@@ -218,8 +219,22 @@ render() {
   done
 }
 
+# Container only, offline: the pinned GitHub and Bitbucket host keys that
+# home.nix links must be there (a @revoked entry is not a pin), or the first
+# git push over SSH hits a host-key prompt or a refusal. Needs no identity
+# file, so it runs before the checks below.
+check_pinned() {
+  local pinned=$HOME/.ssh/pinned_known_hosts host
+  for host in github.com bitbucket.org; do
+    if ! ssh-keygen -F "$host" -f "$pinned" 2>/dev/null | grep -v -e '^#' -e '^@revoked' | grep -q .; then
+      problem "no pinned $host host key in $(tilde "$pinned"): SSH to it would ask to trust the key or refuse it. Run hm-update to switch again"
+    fi
+  done
+}
+
 check() {
   local l key pub fp loaded rc v kd
+  [ "$profile" = container ] && check_pinned
   if [ ! -f "$ID_FILE" ]; then
     if [ "$profile" = workstation ]; then
       problem "no $(tilde "$ID_FILE") yet. Create it from the template, fill it in, then switch again:"
