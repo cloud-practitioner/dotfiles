@@ -117,7 +117,7 @@ EOF
 # plain-key result is the expectation for every modifier.
 check_cursor_keys() {
   local profile=$1 home=$2 out table="$TMP_ROOT/arrow-table" m seq left right
-  local tab=$'\t' text=$'ab cd-ef gh'
+  local text=$'ab cd-ef gh'
 
   out=$(HOME="$home" ZDOTDIR="$home" EDITOR=nvim TERM=xterm zsh -i -c '
       for m in {2..8}; do
@@ -183,7 +183,10 @@ probe_profile() {
   {
     while IFS= read -r line; do
       case "$line" in
-        HISTFILE=*) printf '%s\n' 'HISTFILE="$HOME/.zsh_history"' ;;
+        HISTFILE=*)
+          # shellcheck disable=SC2016 # literal $HOME is expanded later by zsh
+          printf '%s\n' 'HISTFILE="$HOME/.zsh_history"'
+          ;;
         *) printf '%s\n' "$line" ;;
       esac
     done <"$files/.zshrc"
