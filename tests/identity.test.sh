@@ -28,6 +28,10 @@ dotfiles_test_tmproot identity
 S=$ROOT/activation/identity.sh
 WS="$TMP_ROOT/ws space's\$home" CT=$TMP_ROOT/ct BIN=$TMP_ROOT/bin
 mkdir -p "$WS/.dotfiles" "$CT" "$BIN"
+# The pinned host keys home.nix links into a container, which the container
+# check expects; a copy from the repo stands in for the Home Manager link.
+pin_host_keys() { mkdir -p "$1/.ssh" && chmod 700 "$1/.ssh" && cp "$ROOT/ssh/pinned_known_hosts" "$1/.ssh/pinned_known_hosts"; }
+pin_host_keys "$CT"
 ln -s "$ROOT/identity.env.example" "$WS/.dotfiles/identity.env.example"
 cat >"$BIN/ssh" <<'SHIM'
 #!/bin/sh
@@ -237,6 +241,35 @@ out=$(cat "$OUT")
 assert_contains "$out" "no ssh-agent at SSH_AUTH_SOCK=$TMP_ROOT/dead.sock" "container names a missing forwarded agent"
 pass "container render: public halves only, from the read-only identity dir"
 
+echo "== 4b. container: pinned GitHub and Bitbucket host keys are checked offline"
+runo "$CT" container check
+assert_not_contains "$(cat "$OUT")" "pinned" "seeded pinned keys raise nothing"
+runo "$WS" workstation check
+assert_not_contains "$(cat "$OUT")" "pinned" "the workstation has no pinned keys to check"
+pinned=$CT/.ssh/pinned_known_hosts
+cp "$pinned" "$TMP_ROOT/pinned.good"
+rm "$pinned"
+runo "$CT" container check
+[ "$RC" = 1 ] || fail "container check fails without the pinned keys"
+assert_contains "$(cat "$OUT")" "no pinned github.com host key in ~/.ssh/pinned_known_hosts" "a missing pinned file is named for GitHub"
+assert_contains "$(cat "$OUT")" "no pinned bitbucket.org host key in ~/.ssh/pinned_known_hosts" "a missing pinned file is named for Bitbucket"
+assert_contains "$(cat "$OUT")" "Run hm-update" "the check says how to restore the pins"
+# A @revoked entry is not a pin: GitHub left with only its revoked key still fails.
+grep -e '^@revoked github.com' -e '^bitbucket.org ' "$TMP_ROOT/pinned.good" >"$pinned"
+runo "$CT" container check
+[ "$RC" = 1 ] || fail "container check fails when GitHub has only a revoked key"
+assert_contains "$(cat "$OUT")" "no pinned github.com host key" "a revoked-only GitHub entry is not a pin"
+assert_not_contains "$(cat "$OUT")" "no pinned bitbucket.org" "the Bitbucket pins are found"
+# ~/.ssh/known_hosts does not stand in for the pinned file.
+grep '^github.com ' "$TMP_ROOT/pinned.good" >"$CT/.ssh/known_hosts"
+runo "$CT" container check
+assert_contains "$(cat "$OUT")" "no pinned github.com host key" "a user known_hosts entry is not a pin"
+rm "$CT/.ssh/known_hosts"
+cp "$TMP_ROOT/pinned.good" "$pinned"
+runo "$CT" container check
+assert_not_contains "$(cat "$OUT")" "pinned" "restored pinned keys raise nothing again"
+pass "container check: pinned host keys present, offline, without needing identity.env"
+
 echo "== 5. GIT_CONFIG_GLOBAL and ~/.gitconfig mask the identities"
 runo "$CT" container check GIT_CONFIG_GLOBAL=/home/node/.gitconfig-container
 out=$(cat "$OUT")
@@ -374,6 +407,7 @@ pass "Git and copied shell commands preserve accepted values"
 echo "== 8. public halves with and without a final newline"
 PC=$TMP_ROOT/public-container
 mkdir -p "$PC/.config"
+pin_host_keys "$PC"
 ln -s "$Q/.config/dotfiles" "$PC/.config/dotfiles"
 pub_content=$(cat "$Q/.ssh/quoted.pub")
 pub_fp=$(ssh-keygen -lf "$Q/.ssh/quoted.pub" | awk '{print $2}')

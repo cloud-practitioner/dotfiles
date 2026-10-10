@@ -5,6 +5,7 @@
 #
 #   identity.sh render workstation|container   # activation: render + check, never fails
 #   identity.sh check  workstation|container   # doctor: check only, exit 1 on problems
+#     Container check also requires non-revoked entries in the pinned forge file.
 #
 # Inputs (non-secret):
 #   ~/.config/dotfiles
@@ -17,7 +18,8 @@
 # outputs are removed when identity.env goes away; applied-rev is independent:
 #   ~/.config/git/identities.gitconfig   includeIf rules
 #   ~/.config/git/identity/<label>.gitconfig
-#   ~/.ssh/config.d/identities                                legacy aliases
+#   ~/.ssh/config.d/identities          legacy aliases; container also includes
+#                                      ~/.ssh/pinned-hosts.conf
 #   workstation only, in the identity directory:
 #     pub/<label>.pub  public halves of the keys
 #     ssh-keys         private key paths, one per line, for the zsh agent autoload
@@ -189,6 +191,12 @@ render() {
     [ -n "$a" ] && ssh+=$'\n'"Host $a"$'\n'"  HostName $h"$'\n'"  User git"$'\n'"  IdentityFile $(git_quote "$key")"$'\n'"  IdentitiesOnly yes"
     keys+=${keys:+$'\n'}$(expand "${V[${l}_KEY]}")
   done
+  # Git's ssh runs with -F on this file alone (container), so it never reads
+  # ~/.ssh/config. Last, so the pinned forge host keys that home.nix links
+  # (~/.ssh/pinned-hosts.conf) match the host an alias above resolves to.
+  # `Match all` ends the last alias block: an include under an inactive Host
+  # block never matches anything.
+  [ "$profile" = workstation ] || ssh+=$'\n'"Match all"$'\n'"Include $(git_quote "$HOME/.ssh/pinned-hosts.conf")"
   prune "$GIT_OUT/identity" .gitconfig "${LABELS[@]}"
   write_if_changed "$GIT_OUT/identities.gitconfig" "$rules"
   if [ ! -d "$HOME/.ssh" ]; then mkdir -m 700 "$HOME/.ssh" 2>/dev/null; fi
@@ -211,8 +219,21 @@ render() {
   done
 }
 
+# Needs no identity file, so check pins before the early return below.
+# @revoked entries must not satisfy the presence check. See README's
+# SSH in the container profile section for the offline check's contract.
+check_pinned() {
+  local pinned=$HOME/.ssh/pinned_known_hosts host
+  for host in github.com bitbucket.org; do
+    if ! ssh-keygen -F "$host" -f "$pinned" 2>/dev/null | grep -v -e '^#' -e '^@revoked' | grep -q .; then
+      problem "no pinned $host host key in $(tilde "$pinned"): SSH to it would ask to trust the key or refuse it. Run hm-update to switch again"
+    fi
+  done
+}
+
 check() {
   local l key pub fp loaded rc v kd
+  [ "$profile" = container ] && check_pinned
   if [ ! -f "$ID_FILE" ]; then
     if [ "$profile" = workstation ]; then
       problem "no $(tilde "$ID_FILE") yet. Create it from the template, fill it in, then switch again:"
