@@ -94,6 +94,25 @@ Edit the config files in place, then apply:
 That's it.
 No separate build-and-copy step.
 
+### Zsh line editing
+
+After applying `home.nix` changes, open a new zsh session. The shared shell
+config uses Windows-style cursor editing on macOS, Linux, and in devcontainers:
+
+- **Ctrl or Alt + Left/Right**, including combinations with Shift, moves by
+  word. Word movement stops at punctuation such as `-`, `/`, and `.`.
+- **Shift + Left/Right** alone moves by character, without selecting text;
+  this configuration does not provide Shift selection.
+- **Shift, Ctrl, or Alt + Up/Down**, including their combinations, behaves like
+  the plain arrow: move through a multi-line buffer or navigate history.
+- **Home/End**, plain or with any of those modifier combinations, moves to the
+  start/end of the current line (not the whole buffer, even with Ctrl).
+
+The modified-key bindings handle the xterm sequences sent by Windows Terminal
+and Herdr for Shift, Alt, Ctrl, and their combinations, rather than inserting
+stray escape-sequence text. `tests/zsh-keymap.test.sh` covers the bindings and
+line-editor effects in both Linux profiles.
+
 ## Linux
 
 nix-darwin is macOS-only, so on Linux this repo applies just the user-level

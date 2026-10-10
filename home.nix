@@ -186,6 +186,27 @@ in
       zle -N insert-newline _insert-newline
       bindkey '^[[27;2;13~' insert-newline     # Shift+Enter as Herdr sends it to the shell
       bindkey '^[[13;2u' insert-newline        # Shift+Enter (CSI-u / kitty keyboard terminals)
+
+      # See README's Zsh line editing section for the user-facing choices.
+      # Windows Terminal and Herdr encode modified arrows/Home/End as xterm
+      # ESC [ 1 ; <mod> <A-D,H,F>, with <mod> = 1 + Shift(1) + Alt(2) + Ctrl(4).
+      # Without explicit bindings, zle can consume only an escape-sequence
+      # prefix and insert the remainder as text.
+      () {
+        local m k left=backward-char right=forward-char
+        for m in {2..8}; do
+          if (( (m - 1) & 6 )); then left=backward-word right=forward-word
+          else left=backward-char right=forward-char; fi
+          bindkey "^[[1;''${m}D" $left
+          bindkey "^[[1;''${m}C" $right
+          bindkey "^[[1;''${m}A" up-line-or-history
+          bindkey "^[[1;''${m}B" down-line-or-history
+          bindkey "^[[1;''${m}H" beginning-of-line
+          bindkey "^[[1;''${m}F" end-of-line
+        done
+        for k in '^[[H' '^[OH' '^[[1~' '^[[7~'; do bindkey $k beginning-of-line; done
+        for k in '^[[F' '^[OF' '^[[4~' '^[[8~'; do bindkey $k end-of-line; done
+      }
     '' + lib.optionalString (!isWorkstation) ''
 
       # Devcontainer only. Make single-user Nix usable, including after a
