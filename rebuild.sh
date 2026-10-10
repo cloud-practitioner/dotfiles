@@ -13,9 +13,8 @@ case "$(uname -m)" in
   aarch64 | arm64) HM_SYSTEM="aarch64-linux" ;;
   *) echo "Unsupported CPU: $(uname -m)" >&2; exit 1 ;;
 esac
-# Inside a devcontainer, apply the container profile: same shell/tools but no
-# host SSH agent/config. See README's Devcontainers section for the
-# public-key-only identity mount and forwarded-agent contract.
+# Inside a devcontainer, select the container profile. See README's
+# Devcontainers and SSH in the container profile sections for its contracts.
 PROFILE_PREFIX=""
 if [ -f /.dockerenv ] || [ -n "${REMOTE_CONTAINERS:-}" ] || [ -n "${CODESPACES:-}" ]; then
   PROFILE_PREFIX="container-"

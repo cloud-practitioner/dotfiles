@@ -5,7 +5,7 @@
 #
 #   identity.sh render workstation|container   # activation: render + check, never fails
 #   identity.sh check  workstation|container   # doctor: check only, exit 1 on problems
-#                                              # (container: also that the pinned forge host keys are linked)
+#     Container check also requires non-revoked entries in the pinned forge file.
 #
 # Inputs (non-secret):
 #   ~/.config/dotfiles
@@ -18,8 +18,8 @@
 # outputs are removed when identity.env goes away; applied-rev is independent:
 #   ~/.config/git/identities.gitconfig   includeIf rules
 #   ~/.config/git/identity/<label>.gitconfig
-#   ~/.ssh/config.d/identities                                legacy aliases (container:
-#                    ends with an Include of the pinned forge host keys)
+#   ~/.ssh/config.d/identities          legacy aliases; container also includes
+#                                      ~/.ssh/pinned-hosts.conf
 #   workstation only, in the identity directory:
 #     pub/<label>.pub  public halves of the keys
 #     ssh-keys         private key paths, one per line, for the zsh agent autoload
@@ -219,10 +219,9 @@ render() {
   done
 }
 
-# Container only, offline: the pinned GitHub and Bitbucket host keys that
-# home.nix links must be there (a @revoked entry is not a pin), or the first
-# git push over SSH hits a host-key prompt or a refusal. Needs no identity
-# file, so it runs before the checks below.
+# Needs no identity file, so check pins before the early return below.
+# @revoked entries must not satisfy the presence check. See README's
+# SSH in the container profile section for the offline check's contract.
 check_pinned() {
   local pinned=$HOME/.ssh/pinned_known_hosts host
   for host in github.com bitbucket.org; do

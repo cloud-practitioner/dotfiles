@@ -305,9 +305,9 @@ in
   # defaults are off (enableDefaultConfig), so the `*` block spells out the
   # ones this config always had, preserving the default SSH options.
   programs.ssh = if !isWorkstation then {
-    # The container profile, which replaces the static file the devcontainer
-    # image used to write: the same four defaults, the rendered identities, and
-    # the pinned forge host keys, which outrank the `*` block.
+    # Pin policy includes must precede the `*` defaults: OpenSSH uses the
+    # first value set. README's SSH in the container profile section owns
+    # the image rollout and user-facing behavior.
     enable = true;
     enableDefaultConfig = false;
     includes = [ "~/.ssh/config.d/*" "~/.ssh/pinned-hosts.conf" ];
@@ -356,19 +356,12 @@ in
     };
   };
 
-  # Container only: the official GitHub and Bitbucket host keys, committed in
-  # ssh/pinned_known_hosts instead of trusted from an image-build ssh-keyscan,
-  # with GitHub's leaked pre-2023 RSA key marked @revoked. A read-only store
-  # link here, so the writable ~/.ssh/known_hosts (accept-new for every other
-  # host) keeps working. pinned-hosts.conf makes these two hosts check strictly
-  # against ~/.ssh/known_hosts and the pinned file only: a key missing from both
-  # is refused rather than learned, and appending a rotated key to
-  # ~/.ssh/known_hosts accepts it without a rebuild (a @revoked key stays
-  # refused). It matches on the target hostname, so it has to come after the
-  # Host blocks that rewrite an alias to github.com or bitbucket.org:
-  # ~/.ssh/config includes it after config.d/*, and activation/identity.sh
-  # includes it last in config.d/identities, the only file git's
-  # `ssh -F` reads. See README's SSH section.
+  # Container only. Keep the pins read-only without owning the writable
+  # ~/.ssh/known_hosts; README's SSH in the container profile section owns
+  # the trust policy and rotation procedure. Match host uses the target
+  # hostname, so this include must follow alias HostName rewrites, both
+  # after config.d/* here and at the end of activation/identity.sh's
+  # config.d/identities (the only config git's `ssh -F` reads).
   home.file.".ssh/pinned_known_hosts" = lib.mkIf (!isWorkstation) {
     source = ./ssh/pinned_known_hosts;
   };

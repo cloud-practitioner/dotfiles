@@ -38,7 +38,7 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-for tool in nix ssh git zsh; do
+for tool in nix ssh git zsh python3; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"
 done
 dotfiles_test_tmproot ssh-config
@@ -182,7 +182,8 @@ cp "$H/.config/dotfiles/identity.env" "$CH/.config/dotfiles/identity.env"
 chmod 600 "$CH/.config/dotfiles/identity.env"
 for f in config pinned-hosts.conf; do
   [ -e "$ct_files/.ssh/$f" ] || fail "$CT: ~/.ssh/$f is generated"
-  sed -e "s|~/|$CH/|g" -e "s|/home/node/|$CH/|g" "$ct_files/.ssh/$f" >"$CH/.ssh/$f"
+  # Replace the original absolute home first: CH may itself be under /home/node.
+  sed -e "s|/home/node/|$CH/|g" -e "s|~/|$CH/|g" "$ct_files/.ssh/$f" >"$CH/.ssh/$f"
 done
 cp "$ct_files/.ssh/pinned_known_hosts" "$CH/.ssh/pinned_known_hosts"
 chmod u+w "$CH/.ssh/pinned_known_hosts" # the store copy is read-only; the revoked-key test edits this one
@@ -280,7 +281,8 @@ for _ in $(seq 1 50); do
   (exec 3<>"/dev/tcp/127.0.0.1/$candidate") 2>/dev/null || { port=$candidate; break; }
 done
 [ -n "$port" ] || fail "a free loopback port for the throwaway sshd"
-printf 'Port %s\nListenAddress 127.0.0.1\nHostKey %s\nPidFile none\nUsePAM no\nPasswordAuthentication no\nAuthorizedKeysFile none\nStrictModes no\n' \
+# Repeated deliberate refusals must not trigger OpenSSH's per-source penalties.
+printf 'Port %s\nListenAddress 127.0.0.1\nHostKey %s\nPidFile none\nUsePAM no\nPasswordAuthentication no\nAuthorizedKeysFile none\nStrictModes no\nPerSourcePenalties no\nLoginGraceTime 10\n' \
   "$port" "$SD/host" >"$SD/sshd_config"
 "$SSHD" -D -e -f "$SD/sshd_config" >"$SD/sshd.log" 2>&1 &
 SSHD_PID=$!
@@ -290,25 +292,41 @@ for _ in $(seq 1 50); do
   sleep 0.1
 done
 cat >"$SD/dial" <<EOT
-#!/usr/bin/env bash
-exec 3<>/dev/tcp/127.0.0.1/$port
-cat <&3 &
-cat >&3
-kill \$! 2>/dev/null
+#!/usr/bin/env python3
+import os
+import select
+import socket
+
+with socket.create_connection(("127.0.0.1", $port), timeout=10) as connection:
+    connection.settimeout(None)
+    while True:
+        readable, _, _ = select.select([0, connection], [], [])
+        if 0 in readable:
+            data = os.read(0, 65536)
+            if not data:
+                break
+            connection.sendall(data)
+        if connection in readable:
+            data = connection.recv(65536)
+            if not data:
+                break
+            os.write(1, data)
 EOT
 chmod +x "$SD/dial"
 forge_key="$(cut -d' ' -f1,2 "$SD/host.pub")"
-ssh_plain() { env -i HOME="$CH" PATH="$PATH" ssh -F "$CH/.ssh/config" -o ProxyCommand="$SD/dial" -o BatchMode=yes -T "git@$1" 2>&1; }
+ssh_plain() { env -i HOME="$CH" PATH="$PATH" ssh -F "$CH/.ssh/config" -o ProxyCommand="$SD/dial" -o BatchMode=yes -o ConnectTimeout=10 -T "git@$1" 2>&1; }
 git_ssh() { # remote URL
   local cmd
   cmd=$(git config --file "$CH/.config/git/identity/gh_work.gitconfig" core.sshCommand) || fail "$CT: rendered core.sshCommand"
   env -i HOME="$CH" XDG_CONFIG_HOME="$CH/.config" GIT_CONFIG_NOSYSTEM=1 PATH="$PATH" \
-    git -c core.sshCommand="$cmd -o ProxyCommand=$SD/dial -o BatchMode=yes" ls-remote "$1" 2>&1
+    git -c core.sshCommand="$cmd -o ProxyCommand=$SD/dial -o BatchMode=yes -o ConnectTimeout=10" ls-remote "$1" 2>&1
 }
 expect_refused() { # description, output
+  printf '\n--- %s\n%s\n' "$1" "$2"
   case "$2" in *"Host key verification failed"*) ;; *) fail "$1: expected a refusal, got: $2" ;; esac
 }
 expect_accepted() {
+  printf '\n--- %s\n%s\n' "$1" "$2"
   case "$2" in *"Permission denied"*) ;; *) fail "$1: expected the host key to be accepted and authentication to fail, got: $2" ;; esac
   case "$2" in *"Host key verification failed"* | *REVOKED*) fail "$1: host key accepted without a refusal, got: $2" ;; esac
 }

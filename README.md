@@ -245,7 +245,8 @@ not from the folder it sits in:
   `ssh://git@alias/owner/**` when you set a legacy SSH alias), each pointing at
   `~/.config/git/identity/<label>.gitconfig`: `user.name`,
   `user.email`, and `core.sshCommand = ssh -i '<key>' -o IdentitiesOnly=yes`
-  (with `-F ~/.ssh/config.d/identities` in the container, so legacy aliases resolve and the pinned host keys apply).
+  (with `-F ~/.ssh/config.d/identities` in the container so legacy aliases resolve;
+  see [SSH in the container profile](#ssh-in-the-container-profile) for host-key verification).
 - `programs.git` itself sets `user.useConfigOnly = true` (a repo whose owner
   matches no identity **refuses the commit** instead of guessing one) and includes
   the rendered file. `pushInsteadOf` sends pushes for plain `https://github.com/`
@@ -334,30 +335,36 @@ missing-`identity.env` line.
 
 #### SSH in the container profile
 
-The `container` profile also writes `~/.ssh/config` (it used to be a static file the
-devcontainer image wrote): `Include ~/.ssh/config.d/*` and the `*` defaults
+The `container` profile now owns `~/.ssh/config`, replacing the devcontainer
+image's static file: `Include ~/.ssh/config.d/*` and the same `*` defaults
 `AddKeysToAgent yes`, `StrictHostKeyChecking accept-new`, `ServerAliveInterval 60`,
-and `UserKnownHostsFile ~/.ssh/known_hosts`. It has no keys of its own: the agent
-is the workstation's, and the rendered `~/.ssh/config.d/identities` holds only the
-optional aliases.
+and `UserKnownHostsFile ~/.ssh/known_hosts`. It holds no private keys: the agent
+is the workstation's, and the rendered `~/.ssh/config.d/identities` holds the
+optional aliases plus the host-key policy include described below. A separate
+`cloud-practitioner/agentic-devcontainer` change will remove the Dockerfile's
+SSH file creation and `ssh-keyscan`; this dotfiles change does not remove them.
 
 The official host keys of `github.com` and `bitbucket.org` are committed in
 `ssh/pinned_known_hosts` (every key type each forge publishes, with the source and
 fingerprints in the file's comments) and linked read-only as
-`~/.ssh/pinned_known_hosts`; the image no longer needs `ssh-keyscan`. GitHub's former
-RSA key, exposed and replaced on 2023-03-24, is pinned as `@revoked` so it can never
-be accepted from any known_hosts file. For those two hosts,
+`~/.ssh/pinned_known_hosts`. GitHub's former RSA key, exposed and replaced on
+2023-03-24, is pinned as `@revoked` so it can never be accepted from any
+known_hosts file. For those two hosts,
 `~/.ssh/pinned-hosts.conf` sets `StrictHostKeyChecking yes` and reads only
 `~/.ssh/known_hosts` and the pinned file: with the keys pinned there is nothing to
 trust on first use, and an unknown key is refused instead of learned. A stale
-entry an old image's `ssh-keyscan` left in `~/.ssh/known_hosts` is still accepted
-there, as before; the pin protects fresh containers. The file matches on the target
-hostname, so legacy aliases are covered, and it is included from `~/.ssh/config`
-and from the end of `~/.ssh/config.d/identities`, because git's `core.sshCommand`
-runs `ssh -F ~/.ssh/config.d/identities`, which never reads `~/.ssh/config`. Every
-other host keeps `accept-new` and the writable `~/.ssh/known_hosts`, which this
-repo never links or replaces. `activation/identity.sh check container` (run at
-every switch) offline-checks that both forges still have a pinned key.
+non-revoked entry an older image's `ssh-keyscan` left in `~/.ssh/known_hosts` is
+still accepted there, as before; the pin protects fresh containers. The file
+matches on the target hostname, so legacy aliases are covered, and it is included
+from `~/.ssh/config` and from the end of `~/.ssh/config.d/identities`, because
+git's `core.sshCommand` runs `ssh -F ~/.ssh/config.d/identities`, which never
+reads `~/.ssh/config`. Plain SSH to other hosts keeps the `*` defaults, including
+`accept-new`; git's `-F`
+path does not inherit those defaults and uses OpenSSH's `ask` default for other
+hosts. The writable `~/.ssh/known_hosts` is never linked or replaced by this repo.
+`activation/identity.sh check container` (run at every switch) offline-checks
+that both forges have a non-revoked entry in the pinned file, even without an
+identity file; it does not contact either forge.
 
 The switch also makes `~/.ssh` and `~/.ssh/config.d` mode 700. If an older image
 already wrote `~/.ssh/config`, a switch with `-b backup` (what the devcontainer's
@@ -413,13 +420,12 @@ name order, silently. The rules:
 
 `home.nix` takes a `profile` argument. The `container` profile reuses everything
 (zsh, starship, packages, tools) but drops the host SSH machinery - no agent
-service, no startup key loading, no host aliases - because a container has no
-systemd and uses the forwarded workstation agent instead. It keeps a small
-`~/.ssh/config` with the pinned GitHub and Bitbucket host keys, see
-[SSH in the container profile](#ssh-in-the-container-profile). Identity sharing
-requires the workstation's `~/.config/dotfiles` mounted read-only at the same
-home-relative path in the container, plus the agent socket exposed through
-`SSH_AUTH_SOCK`. This directory contains the non-secret identity file and the
+service, no startup key loading, no hard-coded workstation aliases - because a
+container has no systemd and uses the forwarded workstation agent instead. For
+its SSH configuration, see [SSH in the container profile](#ssh-in-the-container-profile).
+Identity sharing requires the workstation's `~/.config/dotfiles` mounted
+read-only at the same home-relative path in the container, plus the agent socket
+exposed through `SSH_AUTH_SOCK`. This directory contains the non-secret identity file and the
 exported public halves described in [Git identity](#git-identity); do not mount
 `~/.ssh` or copy private keys into the container. The renderer selects agent
 keys using those public halves and supplies its own SSH alias include for Git.
