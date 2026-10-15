@@ -3,9 +3,9 @@
 # iqxbusiness/ixia-marketplace, default branch) for Pi, which has no plugin
 # packaging. Pi loads the plugin's skills on demand, for IQX Bitbucket work only:
 #   pi-ixia (Zsh function passing individual --skill paths, without feedback)
-# No Pi setting names the clone, so personal repositories never load them. The
-# clone must be real, not a copy of skills/, because the review-panel skill
-# finds its reviewer agents/ two levels above it. Claude Code needs none of
+# See README's Ixia plugins section for setup and usage restrictions. The clone
+# must be real, not a copy of skills/, because the review-panel skill finds its
+# reviewer agents/ two levels above it. Claude Code needs none of
 # this: it fetches and updates the plugin itself (home/.claude/settings.json
 # registers the marketplace; an IQX repository's own settings enable the plugin).
 #
@@ -15,7 +15,7 @@
 #   bash ~/.dotfiles/tools/ixia-marketplace.sh
 #
 # - no clone yet: `git clone --depth 1` into $IXIA_MARKETPLACE_DIR (default
-#   ~/.local/share/ixia-marketplace, outside every git repo), through a
+#   ~/.local/share/ixia-marketplace, outside this checkout), through a
 #   temporary directory so a failed clone leaves nothing behind;
 # - a clone: `git fetch`, then a fast-forward merge only, so the clone follows
 #   the marketplace's releases and never discards or overwrites local changes

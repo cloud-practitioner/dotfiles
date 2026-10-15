@@ -119,11 +119,9 @@ in
       fi
     ''
   );
-  # The Ixia plugin marketplace for Pi (Claude Code installs it itself, through
-  # home/.claude/settings.json): a real shallow clone, cloned or fast-forwarded
-  # at every switch by tools/ixia-marketplace.sh, which only warns when there is
-  # no network, SSH key, or Bitbucket access. Nothing in Pi's settings names it:
-  # Ixia's skills load on demand only (`pi-ixia`, individual skills without feedback).
+  # Keep a real clone so review-panel can resolve its sibling reviewer agents.
+  # No global Pi skill entry: use `pi-ixia` on demand (individual skills without
+  # feedback). README's Ixia plugins section owns setup and project enablement.
   home.activation.ixiaMarketplace =
     lib.hm.dag.entryAfter [ "writeBoundary" ] ''
       run env PATH="${lib.makeBinPath (with pkgs; [ bash coreutils git gnugrep openssh ])}:$PATH" \
