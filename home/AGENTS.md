@@ -14,6 +14,8 @@
   If you see one, even if it is not caused by what you are working on right now, still get it fixed.
 - Before using "dynamic workflows", "ultra code" or any harness feature that immediately spawns a large swarm of subagents, always explain the tradeoffs and ask the user for explicit approval.
 
+- Agents and workers must never run the ixia-stratex feedback skill or `/ixia-stratex:feedback` because it opens a PR in Duncan's marketplace repository.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.

@@ -8,7 +8,7 @@
 # levels above it. Claude Code needs none of this: it fetches and updates the
 # plugin itself (home/.claude/settings.json).
 #
-# Run by every Linux Home Manager switch (home.nix `home.activation.ixiaMarketplace`),
+# Run by every Home Manager switch (home.nix `home.activation.ixiaMarketplace`),
 # so a devcontainer rebuild, which loses ~/.local/share, gets the clone back
 # from post-create's switch, and by hand to refresh it between switches:
 #   bash ~/.dotfiles/tools/ixia-marketplace.sh
@@ -36,10 +36,19 @@ SKILLS_SUBDIR=plugins/ixia-stratex/skills
 say() { printf 'ixia-marketplace: %s\n' "$*"; }
 warn() { printf 'ixia-marketplace: warning: %s\n' "$*" >&2; }
 
-# Hard cap per git call, so a hung network cannot stall the switch.
 git_run() {
-  GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND=${GIT_SSH_COMMAND:-ssh -o BatchMode=yes -o ConnectTimeout=15} \
-    timeout -k 5 180 git "$@"
+  local workdir=$1 ssh_command
+  local cap=() config=()
+  shift
+  [ "$1" != clone ] || config=(-c "remote.origin.url=$URL")
+  if [ "${GIT_SSH_COMMAND+x}" = x ]; then
+    ssh_command=$GIT_SSH_COMMAND
+  else
+    ssh_command=$(git -C "$workdir" ${config[@]+"${config[@]}"} config --get core.sshCommand 2>/dev/null) || ssh_command=ssh
+  fi
+  command -v timeout >/dev/null 2>&1 && cap=(timeout -k 5 180)
+  GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="$ssh_command -o BatchMode=yes -o ConnectTimeout=15" \
+    ${cap[@]+"${cap[@]}"} git "$@"
 }
 
 clone_fresh() {
@@ -47,8 +56,8 @@ clone_fresh() {
   mkdir -p -- "$(dirname -- "$DIR")" || { warn "cannot create $(dirname -- "$DIR")"; return 0; }
   tmp=$(mktemp -d "$DIR.clone.XXXXXX") || { warn "cannot create a temporary directory next to $DIR"; return 0; }
   say "cloning $URL into $DIR"
-  if git_run clone --quiet --depth 1 -- "$URL" "$tmp/clone" 2>"$tmp/err"; then
-    mv -T -- "$tmp/clone" "$DIR" || warn "cannot move the clone to $DIR"
+  if git_run "$tmp" clone --quiet --depth 1 -- "$URL" "$tmp/clone" 2>"$tmp/err"; then
+    mv -- "$tmp/clone" "$DIR" || warn "cannot move the clone to $DIR"
   else
     warn "cannot clone $URL (offline, or no SSH key or Bitbucket access?): $(tail -n 1 "$tmp/err"); skipping, the next switch retries"
   fi
@@ -57,12 +66,12 @@ clone_fresh() {
 
 refresh() {
   local before after
-  if ! git -C "$DIR" rev-parse --git-dir >/dev/null 2>&1 || [ "$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null)" != "$(realpath -- "$DIR")" ]; then
+  if ! git -C "$DIR" rev-parse --git-dir >/dev/null 2>&1 || [ "$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null)" != "$(cd "$DIR" && pwd -P)" ]; then
     warn "$DIR exists but is not a git clone; leaving it alone (move it aside to get a fresh clone)"
     return 0
   fi
   before=$(git -C "$DIR" rev-parse HEAD 2>/dev/null)
-  if ! git_run -C "$DIR" fetch --quiet origin 2>/dev/null; then
+  if ! git_run "$DIR" -C "$DIR" fetch --quiet origin 2>/dev/null; then
     warn "cannot fetch $DIR (offline, or no SSH key or Bitbucket access?); keeping the current version"
     return 0
   fi

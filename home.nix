@@ -124,13 +124,12 @@ in
   # at every switch by tools/ixia-marketplace.sh, which only warns when there is
   # no network, SSH key, or Bitbucket access. Pi's `skills` setting (in
   # home/.pi/agent/settings.json) names it.
-  home.activation.ixiaMarketplace = lib.mkIf pkgs.stdenv.isLinux (
+  home.activation.ixiaMarketplace =
     lib.hm.dag.entryAfter [ "writeBoundary" ] ''
       run env PATH="${lib.makeBinPath (with pkgs; [ bash coreutils git gnugrep openssh ])}:$PATH" \
         ${pkgs.bash}/bin/bash ${./tools/ixia-marketplace.sh} \
         || warnEcho "tools/ixia-marketplace.sh failed (see above): Pi may lack the Ixia skills. Fix that, then switch again."
-    ''
-  );
+    '';
   home.activation.bashTools = lib.mkIf pkgs.stdenv.isLinux (
     lib.hm.dag.entryAfter [ "writeBoundary" "nodeTools" ] ''
       if ! run env PATH="${lib.makeBinPath (with pkgs; [

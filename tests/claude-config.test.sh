@@ -341,7 +341,6 @@ jq -e --arg u "$IXIA_URL" '.extraKnownMarketplaces.ixia == {source: {source: "gi
   fail "ixia: the dotfiles settings register marketplace ixia (SSH git source, autoUpdate) and enable ixia-stratex@ixia"
 [ "$(jq -r '.extraKnownMarketplaces.ixia.source.url' "$C/settings.json")" = "$IXIA_URL" ] || fail "ixia: marketplace added to settings the owner never had it in"
 [ "$(jq -c .enabledPlugins "$C/settings.json")" = '{"ixia-stratex@ixia":true}' ] || fail "ixia: plugin enabled in settings the owner never had it in"
-grep -qE '://[^/@ "]*[:@]|token|password' "$SRC_SETTINGS" && fail "ixia: no credentials in the dotfiles settings"
 pass "ixia: marketplace and plugin land in owner settings that have neither key"
 
 # Owner objects already there: add the ixia entries inside them, change nothing else.

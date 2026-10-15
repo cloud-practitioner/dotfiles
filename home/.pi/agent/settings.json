@@ -12,7 +12,8 @@
   "followUpMode": "all",
   "collapseChangelog": true,
   "skills": [
-    "~/.local/share/ixia-marketplace/plugins/ixia-stratex/skills"
+    "~/.local/share/ixia-marketplace/plugins/ixia-stratex/skills",
+    "-~/.local/share/ixia-marketplace/plugins/ixia-stratex/skills/feedback/SKILL.md"
   ],
   "packages": [
     "npm:pi-web-access@0.14.0",
