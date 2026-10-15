@@ -13,8 +13,8 @@
 - Apply that same high standard to engineering excellence: lint, test failures, and test flakiness.
   If you see one, even if it is not caused by what you are working on right now, still get it fixed.
 - Before using "dynamic workflows", "ultra code" or any harness feature that immediately spawns a large swarm of subagents, always explain the tradeoffs and ask the user for explicit approval.
-
 - Agents and workers must never run the ixia-stratex feedback skill or `/ixia-stratex:feedback` because it opens a PR in Duncan's marketplace repository.
+- The Ixia plugin's plan-gate and review-panel (ixia-stratex) are for IQX Bitbucket work only; never use them, or their reviewer agents, on personal or other GitHub repositories.
 
 ## Maintaining this file
 

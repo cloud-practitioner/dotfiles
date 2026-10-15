@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Keeps a real, shallow clone of the private Ixia plugin marketplace (Bitbucket
 # iqxbusiness/ixia-marketplace, default branch) for Pi, which has no plugin
-# packaging: Pi's settings `skills` list (home/.pi/agent/settings.json, copied
-# into $PI_CODING_AGENT_DIR by activation/pi-config.sh) names
-# <clone>/plugins/ixia-stratex/skills. The clone must be real, not a copy of
-# skills/, because the review-panel skill finds its reviewer agents/ two
-# levels above it. Claude Code needs none of this: it fetches and updates the
-# plugin itself (home/.claude/settings.json).
+# packaging. Pi loads the plugin's skills on demand, for IQX Bitbucket work only:
+#   pi --skill ~/.local/share/ixia-marketplace/plugins/ixia-stratex/skills
+# No Pi setting names the clone, so personal repositories never load them. The
+# clone must be real, not a copy of skills/, because the review-panel skill
+# finds its reviewer agents/ two levels above it. Claude Code needs none of
+# this: it fetches and updates the plugin itself (home/.claude/settings.json
+# registers the marketplace; an IQX repository's own settings enable the plugin).
 #
 # Run by every Home Manager switch (home.nix `home.activation.ixiaMarketplace`),
 # so a devcontainer rebuild, which loses ~/.local/share, gets the clone back

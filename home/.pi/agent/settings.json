@@ -11,10 +11,6 @@
   "steeringMode": "all",
   "followUpMode": "all",
   "collapseChangelog": true,
-  "skills": [
-    "~/.local/share/ixia-marketplace/plugins/ixia-stratex/skills",
-    "-~/.local/share/ixia-marketplace/plugins/ixia-stratex/skills/feedback/SKILL.md"
-  ],
   "packages": [
     "npm:pi-web-access@0.14.0",
     "npm:@ryan_nookpi/pi-extension-codex-fast-mode@0.2.6"
