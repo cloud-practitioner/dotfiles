@@ -119,6 +119,18 @@ in
       fi
     ''
   );
+  # The Ixia plugin marketplace for Pi (Claude Code installs it itself, through
+  # home/.claude/settings.json): a real shallow clone, cloned or fast-forwarded
+  # at every switch by tools/ixia-marketplace.sh, which only warns when there is
+  # no network, SSH key, or Bitbucket access. Pi's `skills` setting (in
+  # home/.pi/agent/settings.json) names it.
+  home.activation.ixiaMarketplace = lib.mkIf pkgs.stdenv.isLinux (
+    lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+      run env PATH="${lib.makeBinPath (with pkgs; [ bash coreutils git gnugrep openssh ])}:$PATH" \
+        ${pkgs.bash}/bin/bash ${./tools/ixia-marketplace.sh} \
+        || warnEcho "tools/ixia-marketplace.sh failed (see above): Pi may lack the Ixia skills. Fix that, then switch again."
+    ''
+  );
   home.activation.bashTools = lib.mkIf pkgs.stdenv.isLinux (
     lib.hm.dag.entryAfter [ "writeBoundary" "nodeTools" ] ''
       if ! run env PATH="${lib.makeBinPath (with pkgs; [
@@ -471,5 +483,14 @@ in
     run ${pkgs.bash}/bin/bash ${./activation/claude-config.sh} install \
       ${lib.escapeShellArg "${dotfiles}/home/.claude/settings.json"} \
       ${lib.escapeShellArg "${dotfiles}/home/AGENTS.md"}
+  '';
+
+  # Pi reads $PI_CODING_AGENT_DIR/settings.json when that is set (the
+  # devcontainer sets it to the workspace's .pi) and never the ~/.pi/agent link
+  # above. When it points elsewhere, activation/pi-config.sh adds the dotfiles'
+  # Pi `skills` entries to that file, additively. Unset, it does nothing.
+  home.activation.piConfig = lib.hm.dag.entryAfter [ "linkGeneration" ] ''
+    run ${pkgs.bash}/bin/bash ${./activation/pi-config.sh} install \
+      ${lib.escapeShellArg "${dotfiles}/home/.pi/agent/settings.json"}
   '';
 }

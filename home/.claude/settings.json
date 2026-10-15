@@ -43,5 +43,17 @@
       "effortLevel": "xhigh"
     }
   },
-  "model": "opus"
+  "model": "opus",
+  "extraKnownMarketplaces": {
+    "ixia": {
+      "source": {
+        "source": "git",
+        "url": "git@bitbucket.org:iqxbusiness/ixia-marketplace.git"
+      },
+      "autoUpdate": true
+    }
+  },
+  "enabledPlugins": {
+    "ixia-stratex@ixia": true
+  }
 }
