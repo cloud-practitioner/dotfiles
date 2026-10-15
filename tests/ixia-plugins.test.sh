@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Behavior checks for the Ixia plugin marketplace on Pi (Claude Code's half is
 # in tests/claude-config.test.sh): tools/ixia-marketplace.sh, which keeps a real
-# shallow clone that Pi loads on demand (`pi --skill <clone>/plugins/ixia-stratex/skills`;
+# shallow clone that Pi loads on demand (`pi-ixia`, excluding feedback;
 # no Pi setting names it). Needs bash and git. Run: bash tests/ixia-plugins.test.sh
 #
 # Everything runs in a scratch HOME and clone directory, against a local fake
@@ -51,6 +51,54 @@ if command -v nix >/dev/null 2>&1; then
   jq -e 'length > 0 and all(.[]; .clone)' <<<"$darwin_facts" >/dev/null ||
     fail "home.nix: macOS clones the marketplace: $darwin_facts"
   pass "home.nix provisions the marketplace clone on Linux and macOS"
+
+  if command -v zsh >/dev/null 2>&1; then
+    nix --extra-experimental-features 'nix-command flakes' eval --raw \
+      "$ROOT#darwinConfigurations.mac.config.home-manager.users.dev.programs.zsh.initContent" \
+      >"$TMP_ROOT/init.zsh" 2>"$TMP_ROOT/zsh-nix.err" || fail "Zsh initialization evaluates: $(cat "$TMP_ROOT/zsh-nix.err")"
+    PI_HOME="$TMP_ROOT/pi home"
+    PI_BIN="$TMP_ROOT/pi-bin"
+    PI_SKILLS="$PI_HOME/$SKILLS_DIR"
+    mkdir -p "$PI_HOME" "$PI_BIN"
+    cat >"$PI_BIN/pi" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >"$PI_ARGS_LOG"
+exit "${PI_EXIT:-0}"
+SH
+    chmod +x "$PI_BIN/pi"
+    run_pi_ixia() {
+      PI_OUT=$(env -i HOME="$PI_HOME" PATH="$PI_BIN:$PATH" TERM=xterm \
+        PI_INIT="$TMP_ROOT/init.zsh" PI_ARGS_LOG="$TMP_ROOT/pi-args" PI_EXIT="${PI_EXIT:-0}" \
+        zsh -f -i -c 'source "$PI_INIT"; pi-ixia "$@"' -- "$@" </dev/null 2>&1)
+      PI_RC=$?
+    }
+    for layout in missing empty feedback-only; do
+      case $layout in
+        empty) mkdir -p "$PI_SKILLS" ;;
+        feedback-only)
+          mkdir -p "$PI_SKILLS/feedback"
+          printf 'feedback\n' >"$PI_SKILLS/feedback/SKILL.md"
+          ;;
+      esac
+      run_pi_ixia
+      [ "$PI_RC" != 0 ] && [ ! -e "$TMP_ROOT/pi-args" ] || fail "pi-ixia $layout: must not start Pi: $PI_OUT"
+      assert_contains "$PI_OUT" 'pi-ixia: warning:' "pi-ixia $layout: warns"
+    done
+    mkdir -p "$PI_SKILLS/plan-gate" "$PI_SKILLS/review-panel" "$PI_SKILLS/empty"
+    printf 'plan-gate\n' >"$PI_SKILLS/plan-gate/SKILL.md"
+    printf 'review-panel\n' >"$PI_SKILLS/review-panel/SKILL.md"
+    printf 'not a skill\n' >"$PI_SKILLS/README.md"
+    printf '%s\n' --skill "$PI_SKILLS/plan-gate" --skill "$PI_SKILLS/review-panel" \
+      --model sonnet 'IQX task with spaces' >"$TMP_ROOT/expected-pi-args"
+    run_pi_ixia --model sonnet 'IQX task with spaces'
+    [ "$PI_RC" = 0 ] || fail "pi-ixia: starts Pi: $PI_OUT"
+    cmp -s "$TMP_ROOT/expected-pi-args" "$TMP_ROOT/pi-args" || fail "pi-ixia: loads individual skills without feedback and preserves caller arguments"
+    PI_EXIT=7 run_pi_ixia
+    [ "$PI_RC" = 7 ] || fail "pi-ixia: preserves Pi exit status: $PI_RC: $PI_OUT"
+    pass "pi-ixia excludes feedback, forwards arguments and exit status, and warns without usable skills"
+  else
+    pass "pi-ixia checks # SKIP zsh not on PATH"
+  fi
 else
   pass "home.nix checks # SKIP nix not on PATH"
 fi
@@ -187,7 +235,7 @@ OUT=$(env -u IXIA_MARKETPLACE_URL -u IXIA_MARKETPLACE_DIR HOME="$TMP_ROOT/home2"
   REAL_GIT="$(command -v git)" LOCAL_MARKETPLACE="$URL" CLONE_URL_LOG="$TMP_ROOT/clone-url" bash "$CLONE_SCRIPT" 2>&1)
 [ "$(cat "$TMP_ROOT/clone-url")" = git@bitbucket.org:iqxbusiness/ixia-marketplace.git ] || fail "default SSH clone URL: $OUT"
 [ -f "$TMP_ROOT/home2/$SKILLS_DIR/plan-gate/SKILL.md" ] || fail "default clone provides the skills directory to load on demand: $OUT"
-pass "default SSH URL and clone destination provide the skills directory for pi --skill"
+pass "default SSH URL and clone destination provide the skills directory for pi-ixia"
 
 SSH_BIN="$TMP_ROOT/ssh-bin"
 mkdir -p "$SSH_BIN"

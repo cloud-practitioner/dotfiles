@@ -2,7 +2,7 @@
 # Keeps a real, shallow clone of the private Ixia plugin marketplace (Bitbucket
 # iqxbusiness/ixia-marketplace, default branch) for Pi, which has no plugin
 # packaging. Pi loads the plugin's skills on demand, for IQX Bitbucket work only:
-#   pi --skill ~/.local/share/ixia-marketplace/plugins/ixia-stratex/skills
+#   pi-ixia (Zsh function passing individual --skill paths, without feedback)
 # No Pi setting names the clone, so personal repositories never load them. The
 # clone must be real, not a copy of skills/, because the review-panel skill
 # finds its reviewer agents/ two levels above it. Claude Code needs none of

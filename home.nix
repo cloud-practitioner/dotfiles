@@ -123,7 +123,7 @@ in
   # home/.claude/settings.json): a real shallow clone, cloned or fast-forwarded
   # at every switch by tools/ixia-marketplace.sh, which only warns when there is
   # no network, SSH key, or Bitbucket access. Nothing in Pi's settings names it:
-  # Ixia's skills load on demand only (`pi --skill <clone>/plugins/ixia-stratex/skills`).
+  # Ixia's skills load on demand only (`pi-ixia`, individual skills without feedback).
   home.activation.ixiaMarketplace =
     lib.hm.dag.entryAfter [ "writeBoundary" ] ''
       run env PATH="${lib.makeBinPath (with pkgs; [ bash coreutils git gnugrep openssh ])}:$PATH" \
@@ -299,6 +299,24 @@ in
       if (( $+commands[herdr] )); then
         source <(herdr completion zsh)
       fi
+    '' + ''
+      pi-ixia() {
+        local dir="$HOME/.local/share/ixia-marketplace/plugins/ixia-stratex/skills" skill
+        local -a skills=()
+        if [[ ! -d "$dir" ]]; then
+          printf 'pi-ixia: warning: Ixia clone missing; run a dotfiles switch first\n' >&2
+          return 1
+        fi
+        for skill in "$dir"/*/SKILL.md(N); do
+          [[ "''${skill:h:t}" == feedback ]] && continue
+          skills+=(--skill "''${skill:h}")
+        done
+        if (( ''${#skills} == 0 )); then
+          printf 'pi-ixia: warning: no Ixia skills available\n' >&2
+          return 1
+        fi
+        pi "''${skills[@]}" "$@"
+      }
     '';
     shellAliases = {
       ".." = "cd ..";
