@@ -37,9 +37,9 @@
 #   another link is left alone, and a moved skill link still reads however
 #   its target was written (relative, or absolute through a symlinked directory
 #   or through ~/.claude/skills itself);
-# - the Ixia marketplace and plugin: added whole where the owner has neither
-#   key, one entry at a time inside an owner object, never over an owner entry
-#   (or a non-object owner value);
+# - the Ixia marketplace (no enabled plugin): added whole where the owner has no
+#   such key, one entry at a time inside an owner object, never over an owner
+#   entry (or a non-object owner value);
 # - configured skills, settings.json or CLAUDE.md the owner linked back into
 #   ~/.claude: nothing deleted or re-pointed, no warning and no link loop,
 #   across repeated switches.
@@ -332,18 +332,20 @@ assert_link "$H/.claude/CLAUDE.md" "$C/CLAUDE.md" "edge: ~/.claude/CLAUDE.md sho
 [ "$(count_hook tool-c "$C/settings.json")" = 1 ] || fail "edge: missing hooks still added"
 pass "edge: owner CLAUDE.md kept, existing hook command not duplicated"
 
-# The Ixia marketplace and plugin (references only, the plugin itself is fetched
-# by Claude Code): SSH source (the form that fetches unattended), autoUpdate,
-# enabled at user level.
+# The Ixia marketplace (a reference only; Claude Code fetches it): SSH source
+# (the form that fetches unattended), autoUpdate. The plugin is deliberately
+# not enabled at user level: only IQX Bitbucket repositories enable it, in
+# their own project settings.
 IXIA_URL=git@bitbucket.org:iqxbusiness/ixia-marketplace.git
-jq -e --arg u "$IXIA_URL" '.extraKnownMarketplaces.ixia == {source: {source: "git", url: $u}, autoUpdate: true}
-  and .enabledPlugins == {"ixia-stratex@ixia": true}' "$SRC_SETTINGS" >/dev/null ||
-  fail "ixia: the dotfiles settings register marketplace ixia (SSH git source, autoUpdate) and enable ixia-stratex@ixia"
+jq -e --arg u "$IXIA_URL" '.extraKnownMarketplaces == {ixia: {source: {source: "git", url: $u}, autoUpdate: true}}
+  and (has("enabledPlugins") | not)' "$SRC_SETTINGS" >/dev/null ||
+  fail "ixia: the dotfiles settings register marketplace ixia (SSH git source, autoUpdate) and enable no plugin"
 [ "$(jq -r '.extraKnownMarketplaces.ixia.source.url' "$C/settings.json")" = "$IXIA_URL" ] || fail "ixia: marketplace added to settings the owner never had it in"
-[ "$(jq -c .enabledPlugins "$C/settings.json")" = '{"ixia-stratex@ixia":true}' ] || fail "ixia: plugin enabled in settings the owner never had it in"
-pass "ixia: marketplace and plugin land in owner settings that have neither key"
+[ "$(jq 'has("enabledPlugins")' "$C/settings.json")" = false ] || fail "ixia: no plugin enabled in the owner's user settings"
+pass "ixia: the marketplace, and no enabled plugin, land in owner settings that lack the key"
 
-# Owner objects already there: add the ixia entries inside them, change nothing else.
+# An owner object already there: add the ixia entry inside it, change nothing
+# else, and leave the owner's enabledPlugins alone.
 new_case
 owner_settings
 jq '.extraKnownMarketplaces = {"corp": {"source": {"source": "github", "repo": "corp/market"}}}
@@ -353,32 +355,30 @@ cp -p "$C/settings.json" "$TMP_ROOT/owner-objects.orig"
 activate "$C"
 jq -e --arg u "$IXIA_URL" '.extraKnownMarketplaces == {"corp": {"source": {"source": "github", "repo": "corp/market"}},
     "ixia": {source: {source: "git", url: $u}, autoUpdate: true}}
-  and .enabledPlugins == {"corp-tool@corp": true, "other@official": false, "ixia-stratex@ixia": true}' "$C/settings.json" >/dev/null ||
-  fail "ixia: entries added inside the owner's extraKnownMarketplaces and enabledPlugins, theirs untouched: $(jq -c '[.extraKnownMarketplaces,.enabledPlugins]' "$C/settings.json")"
+  and .enabledPlugins == {"corp-tool@corp": true, "other@official": false}' "$C/settings.json" >/dev/null ||
+  fail "ixia: entry added inside the owner's extraKnownMarketplaces, theirs and enabledPlugins untouched: $(jq -c '[.extraKnownMarketplaces,.enabledPlugins]' "$C/settings.json")"
 state=$(snapshot "$C")
 activate "$C"
 [ "$(snapshot "$C")" = "$state" ] || fail "ixia: re-run is a no-op"
 backups=("$C"/settings.json.pre-dotfiles-*)
 cmp -s "${backups[0]}" "$TMP_ROOT/owner-objects.orig" || fail "ixia: backup is the owner's original"
-pass "ixia: entries added inside the owner's existing objects, idempotently"
+pass "ixia: entry added inside the owner's existing object, idempotently"
 
-# Owner decisions win: a disabled plugin stays disabled, their own ixia source
-# stays, and a non-object owner value is left alone.
+# Owner decisions win: their own ixia source stays, and a non-object owner
+# value is left alone.
 new_case
 owner_settings
-jq '.extraKnownMarketplaces = {"ixia": {"source": {"source": "git", "url": "https://example.invalid/mine.git"}}}
-  | .enabledPlugins = {"ixia-stratex@ixia": false}' "$C/settings.json" >"$TMP_ROOT/s.json"
+jq '.extraKnownMarketplaces = {"ixia": {"source": {"source": "git", "url": "https://example.invalid/mine.git"}}}' "$C/settings.json" >"$TMP_ROOT/s.json"
 cat "$TMP_ROOT/s.json" >"$C/settings.json"
 activate "$C"
-jq -e '.extraKnownMarketplaces == {"ixia": {"source": {"source": "git", "url": "https://example.invalid/mine.git"}}}
-  and .enabledPlugins == {"ixia-stratex@ixia": false}' "$C/settings.json" >/dev/null || fail "ixia: owner's own ixia entries win"
+jq -e '.extraKnownMarketplaces == {"ixia": {"source": {"source": "git", "url": "https://example.invalid/mine.git"}}}' "$C/settings.json" >/dev/null || fail "ixia: owner's own ixia entry wins"
 new_case
 owner_settings
-jq '.extraKnownMarketplaces = null | .enabledPlugins = ["x"]' "$C/settings.json" >"$TMP_ROOT/s.json"
+jq '.extraKnownMarketplaces = null' "$C/settings.json" >"$TMP_ROOT/s.json"
 cat "$TMP_ROOT/s.json" >"$C/settings.json"
 activate "$C"
-jq -e '.extraKnownMarketplaces == null and .enabledPlugins == ["x"]' "$C/settings.json" >/dev/null || fail "ixia: non-object owner values left alone"
-pass "ixia: owner's own entries and non-object values win"
+jq -e '.extraKnownMarketplaces == null' "$C/settings.json" >/dev/null || fail "ixia: non-object owner value left alone"
+pass "ixia: owner's own entry and non-object value win"
 
 # No owner settings yet: a real file with the dotfiles settings.
 new_case

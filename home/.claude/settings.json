@@ -52,8 +52,5 @@
       },
       "autoUpdate": true
     }
-  },
-  "enabledPlugins": {
-    "ixia-stratex@ixia": true
   }
 }
