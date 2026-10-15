@@ -467,8 +467,11 @@ activation also installs the Claude files there:
   adds only the settings keys and hook commands missing there and never changes
   a value already there, so changing an existing value in
   `home/.claude/settings.json` does not carry over; edit it in
-  `$CLAUDE_CONFIG_DIR/settings.json` directly. `CLAUDE.md` is linked only if
-  absent.
+  `$CLAUDE_CONFIG_DIR/settings.json` directly. The one deeper step: the
+  entries of `extraKnownMarketplaces` are added one by one inside an object the
+  owner already has, never changing an entry of theirs
+  (see [Ixia plugins](#ixia-plugins-claude-code-and-pi)). `CLAUDE.md` is linked
+  only if absent.
 - `~/.claude/settings.json` and `~/.claude/CLAUDE.md` then point into
   `$CLAUDE_CONFIG_DIR`, so tools that edit them (hook installers) change the
   files Claude reads.
@@ -539,6 +542,7 @@ If you don't use it, just remove it from `brews` in your copy.
 - `tools/bash-tools.sh` - installs herdr, Claude Code, Pi, the Copilot CLI, and Antigravity from their own installers at every Linux switch.
 - `identity.env.example` and `activation/identity.sh` - the template for your git and SSH identities, and the renderer and checker that apply it.
 - `tests/` - behavior tests; run one with `bash tests/<name>.test.sh`.
+- `tools/ixia-marketplace.sh` - keeps the shallow clone of the Ixia plugin marketplace that Pi loads on demand (see [Ixia plugins](#ixia-plugins-claude-code-and-pi)).
 - `activation/claude-config.sh` - the activation steps that install the Claude Code files into `$CLAUDE_CONFIG_DIR` when it points somewhere other than `~/.claude` (see [Devcontainers](#devcontainers)).
 - `rebuild.sh` - re-applies the config after the first switch.
   Auto-detects a devcontainer and picks the container profile; otherwise uses the workstation profile. Run this every time you make a change; to pick up pushed changes on WSL2, pull first (see [Linux](#linux)).
@@ -549,7 +553,7 @@ If you don't use it, just remove it from `brews` in your copy.
 The files under `home/` are the real files - editing them here is editing your live config, no rebuild needed to see the change in your editor.
 `home.nix` uses `mkOutOfStoreSymlink` to point paths like `~/.config/nvim` straight at `home/.config/nvim` in this repo, so the two never drift out of sync.
 You only run `./rebuild.sh` when you change something that isn't just a symlinked file, like a package list or a system default.
-The one exception is Claude Code's settings when `CLAUDE_CONFIG_DIR` points elsewhere: re-applying adds only keys and hook commands missing from `$CLAUDE_CONFIG_DIR/settings.json`, and changes to existing values must be made in that file directly (see [Devcontainers](#devcontainers)).
+The one exception is Claude Code's settings when `CLAUDE_CONFIG_DIR` points elsewhere: re-applying follows the additive merge rules in [Devcontainers](#devcontainers), and changes to existing values must be made in `$CLAUDE_CONFIG_DIR/settings.json` directly.
 
 For herdr, only `~/.config/herdr/config.toml` links into this repo; `~/.config/herdr` stays a real directory for runtime state (`session.json`, `session-snapshots/`, sockets, logs). On the next switch, activation removes only the legacy Home Manager-owned whole-directory symlink before linking the file; real directories and user-owned symlinks are left alone. Existing runtime files in the checkout are not moved. This prepares the directory for a persistent devcontainer bind mount, which ships separately; this dotfiles change alone does not preserve sessions across container rebuilds.
 
@@ -588,7 +592,34 @@ The versions are immutable pins, so Pi does not move them during package updates
 
 Both packages execute with your full user permissions and must be trusted like any other executable code.
 
-Home Manager deliberately does not manage `~/.pi/agent` itself, or Pi authentication, sessions, trust decisions, caches, npm/git package trees, or any other runtime state. The model overrides contain no credentials or endpoint settings, do not choose a default model, and only take effect after you authenticate Pi yourself. This remains an additive post-video layer: it does not add a launcher or package source code to this repository.
+Home Manager deliberately does not manage `~/.pi/agent` itself, or Pi authentication, sessions, trust decisions, caches, npm/git package trees, or any other runtime state. The model overrides contain no credentials or endpoint settings, do not choose a default model, and only take effect after you authenticate Pi yourself. These resources remain an additive post-video layer; third-party package source code is not stored in this repository.
+
+## Ixia plugins (Claude Code and Pi)
+
+The private Ixia plugin marketplace (Bitbucket `iqxbusiness/ixia-marketplace`, branch `master`; marketplace `ixia`, plugin `ixia-stratex`: plan-gate, review-panel and the other Ixia skills, with the reviewer agents) is for **IQX Bitbucket work only**. This config makes it available on Linux (workstation and container) and macOS without enabling it globally. Keep project enablement and on-demand loading limited to IQX Bitbucket work; do not use plan-gate or review-panel on personal GitHub or other repositories. The repository is private: a machine needs Bitbucket access over SSH (the same key and agent that clone other IQX repositories). Without it, the switch only warns and the next switch retries. No credentials are stored here; only the repository name appears.
+
+On macOS, load the Bitbucket work key into the SSH agent with `ssh-add ~/.ssh/id_ed25519_bb_work` before switching or starting Claude Code: both Pi's clone/refresh and Claude Code's marketplace fetch use the canonical `git@bitbucket.org:iqxbusiness/ixia-marketplace.git` URL. If the key is not loaded or the machine lacks Bitbucket access, the switch only warns and skips the Pi clone/update (exit 0, keeping any existing clone); it never fails the switch, and the next switch retries.
+
+- **Claude Code** installs and updates the plugin itself. `home/.claude/settings.json` registers the marketplace as `extraKnownMarketplaces.ixia` (git source, the canonical SSH URL above, `autoUpdate: true`) but deliberately does **not** enable `ixia-stratex@ixia` at user level. The plugin is enabled only where an IQX Bitbucket repository's own `.claude/settings.json` enables it (as `iqx.orchestration.online` does). An IQX repository without its own enablement can enable it at project scope via `/plugin install ixia-stratex@ixia`. The SSH form is the one Claude can fetch unattended; the HTTPS URL would need a Bitbucket login. For the owner-preserving merge when `$CLAUDE_CONFIG_DIR` points elsewhere, see [Devcontainers](#devcontainers).
+- **Pi** loads Ixia as skills rather than a Claude Code plugin; this config adds no Ixia skills to Pi's settings. `tools/ixia-marketplace.sh` only keeps a real shallow clone at `~/.local/share/ixia-marketplace` (outside this checkout; it must be a real clone because review-panel reads the reviewer `agents/` two directories above each skill directory). For IQX Bitbucket work, load the skills on demand:
+
+  ```sh
+  pi-ixia
+  ```
+
+  This Zsh function passes each skill directory to Pi with its own `--skill` argument, excluding `feedback`, and forwards any other Pi arguments (for example, `pi-ixia --model sonnet`). It warns without starting Pi if the clone or usable skills are missing. It does not check the current repository, so invoke it only for IQX Bitbucket work.
+
+  The clone lives in the home directory, which a devcontainer rebuild resets; the post-create switch re-creates it. The skills are not installed through the `skills` CLI or into `~/.agents/skills`: that folder is read by every agent, which would load them everywhere (Claude Code twice).
+- **Updates.** Claude Code's `autoUpdate` follows the marketplace. For Pi, every switch (`rebuild.sh`, `hm-update`, the post-create switch) fast-forwards the clone, never discarding local changes or commits (it warns and leaves it as it is when it cannot fast-forward). Between switches, refresh by hand, then start a new Pi session:
+
+  ```sh
+  git -C ~/.local/share/ixia-marketplace pull --ff-only
+  ```
+
+- **Apply**: re-run the dotfiles apply (`hm-update` in the devcontainer, `./rebuild.sh` on the workstation), open a new Zsh session to pick up `pi-ixia`, and restart Claude Code sessions. On macOS, load the work key first as described above. Claude Code then knows the `ixia` marketplace (`/plugin`); follow the project enablement and Pi loading instructions above. Rebuilding the devcontainer does the same through post-create.
+- **The ixia `feedback` skill opens a pull request in Duncan's marketplace repository.** Agents and workers must not run it (nor `/ixia-stratex:feedback`); it is for a person giving feedback. The global agent instructions (`home/AGENTS.md`), loaded by Claude Code, Codex and opencode, say so, and that the plan-gate and review-panel are for IQX Bitbucket work only. Pi does not read that file; `pi-ixia` excludes `feedback` from its per-skill load arguments instead.
+
+`bash tests/ixia-plugins.test.sh` and `bash tests/claude-config.test.sh` check the behaviour (local fake repository, no Bitbucket).
 
 ## Notes
 

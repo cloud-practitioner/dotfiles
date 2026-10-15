@@ -18,7 +18,10 @@
 #
 # install (after linkGeneration):
 #   - settings.json: additive merge that never rewrites an owner value. Top-level
-#     keys (theme, statusLine) are added only when absent; each hook is added
+#     keys (theme, statusLine) are added only when absent; the entries of
+#     extraKnownMarketplaces (the ixia marketplace) are added one by one inside
+#     an owner object that already has that key, never changing an entry the
+#     owner has; each hook is added
 #     only when no hook for the same event already runs its command. Written
 #     only when that changes something, atomically and keeping the file mode,
 #     after a one-time byte-for-byte settings.json.pre-dotfiles-<epoch> backup.
@@ -99,6 +102,10 @@ reduce ($add[0] | to_entries[]) as $e ($cur[0];
         | [$group.hooks[]? | select(id | IN($have[]) | not)] as $missing
         | if $missing == [] then .
           else .hooks[$ev.key] += [$group + {hooks: $missing}] end))
+  elif $e.key == "extraKnownMarketplaces"
+      and (.[$e.key] | type) == "object" and ($e.value | type) == "object" then
+    .[$e.key] as $own
+    | .[$e.key] += ($e.value | with_entries(select(.key as $k | $own | has($k) | not)))
   elif has($e.key) then .
   else . + {($e.key): $e.value} end)'
 

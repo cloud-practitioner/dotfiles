@@ -119,6 +119,15 @@ in
       fi
     ''
   );
+  # Keep a real clone so review-panel can resolve its sibling reviewer agents.
+  # No global Pi skill entry: use `pi-ixia` on demand (individual skills without
+  # feedback). README's Ixia plugins section owns setup and project enablement.
+  home.activation.ixiaMarketplace =
+    lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+      run env PATH="${lib.makeBinPath (with pkgs; [ bash coreutils git gnugrep openssh ])}:$PATH" \
+        ${pkgs.bash}/bin/bash ${./tools/ixia-marketplace.sh} \
+        || warnEcho "tools/ixia-marketplace.sh failed (see above): the Ixia skills clone for Pi may be missing or stale. Fix that, then switch again."
+    '';
   home.activation.bashTools = lib.mkIf pkgs.stdenv.isLinux (
     lib.hm.dag.entryAfter [ "writeBoundary" "nodeTools" ] ''
       if ! run env PATH="${lib.makeBinPath (with pkgs; [
@@ -288,6 +297,24 @@ in
       if (( $+commands[herdr] )); then
         source <(herdr completion zsh)
       fi
+    '' + ''
+      pi-ixia() {
+        local dir="$HOME/.local/share/ixia-marketplace/plugins/ixia-stratex/skills" skill
+        local -a skills=()
+        if [[ ! -d "$dir" ]]; then
+          printf 'pi-ixia: warning: Ixia clone missing; run a dotfiles switch first\n' >&2
+          return 1
+        fi
+        for skill in "$dir"/*/SKILL.md(N); do
+          [[ "''${skill:h:t}" == feedback ]] && continue
+          skills+=(--skill "''${skill:h}")
+        done
+        if (( ''${#skills} == 0 )); then
+          printf 'pi-ixia: warning: no Ixia skills available\n' >&2
+          return 1
+        fi
+        pi "''${skills[@]}" "$@"
+      }
     '';
     shellAliases = {
       ".." = "cd ..";
