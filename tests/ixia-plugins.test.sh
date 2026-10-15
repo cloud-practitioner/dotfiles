@@ -259,6 +259,19 @@ for operation in clone fetch; do
 done
 pass "clone and refresh work without timeout or realpath on PATH"
 
+before=$(git -C "$DIR" rev-parse HEAD)
+git -C "$DIR" remote set-url origin git@bitbucket.org:iqxbusiness/ixia-marketplace.git
+run_clone PATH="$PORTABLE_BIN" GIT_CONFIG_GLOBAL=/dev/null GIT_SSH_COMMAND=false GIT_SSH_VARIANT=ssh
+[ "$RC" = 0 ] && [ "$(git -C "$DIR" rev-parse HEAD)" = "$before" ] || fail "without timeout: rejected SSH fetch exits 0 and keeps clone: $OUT"
+assert_contains "$OUT" "warning: cannot fetch" "without timeout: rejected SSH fetch warns"
+DIR="$TMP_ROOT/portable-failed/ixia-marketplace"
+run_clone PATH="$PORTABLE_BIN" GIT_CONFIG_GLOBAL=/dev/null GIT_SSH_COMMAND=false GIT_SSH_VARIANT=ssh \
+  IXIA_MARKETPLACE_URL=git@bitbucket.org:iqxbusiness/ixia-marketplace.git
+[ "$RC" = 0 ] && [ ! -e "$DIR" ] && [ "$(find "$TMP_ROOT/portable-failed" -mindepth 1 | wc -l)" = 0 ] ||
+  fail "without timeout: rejected SSH clone exits 0 without leftovers: $OUT"
+assert_contains "$OUT" "warning: cannot clone" "without timeout: rejected SSH clone warns"
+pass "without timeout, missing SSH access only warns and skips clone or refresh"
+
 # --- activation/pi-config.sh ----------------------------------------------------
 
 PH="$TMP_ROOT/pihome"
