@@ -481,6 +481,8 @@ in
 
   home.file.".claude/CLAUDE.md".source =
     config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/AGENTS.md";
+  home.file.".pi/agent/AGENTS.md".source =
+    config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/AGENTS.md";
   home.file.".codex/AGENTS.md".source =
     config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/AGENTS.md";
   home.file.".config/opencode/AGENTS.md".source =
@@ -497,6 +499,15 @@ in
   home.activation.claudeConfig = lib.hm.dag.entryAfter [ "linkGeneration" ] ''
     run ${pkgs.bash}/bin/bash ${./activation/claude-config.sh} install \
       ${lib.escapeShellArg "${dotfiles}/home/.claude/settings.json"} \
+      ${lib.escapeShellArg "${dotfiles}/home/AGENTS.md"}
+  '';
+
+  # Pi reads <agent-dir>/AGENTS.md, where the agent dir is $PI_CODING_AGENT_DIR
+  # when set, else ~/.pi/agent; only activation can see that variable. When it
+  # points elsewhere, activation/pi-memory.sh links AGENTS.md there too, unless
+  # the directory already holds user instructions. Unset, it does nothing.
+  home.activation.piMemory = lib.hm.dag.entryAfter [ "linkGeneration" ] ''
+    run ${pkgs.bash}/bin/bash ${./activation/pi-memory.sh} install \
       ${lib.escapeShellArg "${dotfiles}/home/AGENTS.md"}
   '';
 }
