@@ -32,7 +32,7 @@ Running the switch builds:
 - Shell (zsh, aliases, starship prompt)
 - Editor (Neovim config with the rose-pine moon theme)
 - Terminal (WezTerm config with the rose-pine moon theme and dimmed unfocused windows)
-- Agent configs (Claude, Codex, opencode all share one AGENTS.md)
+- Agent configs with [shared user instructions](#make-it-yours)
 - Optional Pi theme and local extensions, generic UI settings and model overrides, plus two deliberately pinned third-party Pi packages
 
 ## Prerequisites
@@ -497,6 +497,29 @@ on those two `~/.claude` links; delete them, or apply from a shell that has the
 variable. The rules live in `activation/claude-config.sh`;
 `tests/claude-config.test.sh` checks them.
 
+**Pi and `PI_CODING_AGENT_DIR`.** Pi's [configuration reference](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/configuration.md#agent-directory)
+places user instructions in `<agent-dir>/AGENTS.md`, where the agent directory
+is `$PI_CODING_AGENT_DIR` when nonempty, else `~/.pi/agent`.
+`~/.pi/agent/AGENTS.md` links to `home/AGENTS.md` like the other agents' copies,
+with Home Manager's normal collision handling. When `$PI_CODING_AGENT_DIR`
+points elsewhere (the devcontainer points it into the workspace),
+`activation/pi-memory.sh` links `$PI_CODING_AGENT_DIR/AGENTS.md` to the same
+file, but only when that directory holds none of the files Pi reads as user
+instructions (`AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`,
+`CLAUDE.MD`). Existing owner instructions, including dangling symlinks, are
+kept untouched with a warning; an already-correct link is a silent no-op.
+Use an absolute path or a leading `~`: other relative paths are skipped with
+a warning because Pi resolves them from its working directory. The same
+environment caveat as for Claude applies: run `hm-update` or `rebuild.sh`
+from a shell where the variable is set. `tests/pi-memory.test.sh` checks it.
+
+After the next switch, use `readlink -f` to check that
+`~/.pi/agent/AGENTS.md` (or `$PI_CODING_AGENT_DIR/AGENTS.md` for an override)
+resolves to the same file as `~/.dotfiles/home/AGENTS.md`. If activation warned
+about existing instructions, inspect those first: they were not replaced.
+Start Pi again and confirm its startup header lists the user-instructions
+file; `/reload` refreshes context files in an existing session.
+
 Container usernames come from the `containerUsers` list in `flake.nix` (a
 devcontainer base image's non-root user, e.g. `node`), so nothing rewrites `user`
 at runtime. `rebuild.sh` auto-detects a container (`/.dockerenv`,
@@ -527,7 +550,7 @@ If you don't use it, just remove it from `brews` in your copy.
 
 **Heads-up:**
 
-- `home/AGENTS.md` is my personal agent policy, and `home.nix` installs it for Claude, Codex, and opencode.
+- `home/AGENTS.md` is my personal agent policy, and `home.nix` installs it for Claude, Codex, opencode, and Pi.
   If you clone this repo, you'd silently inherit my agent instructions - edit or delete `home/AGENTS.md` if you don't want that.
 - The `cc` and `co` shell aliases in `home.nix` are high-agency shortcuts: `claude --dangerously-skip-permissions` and `codex --full-auto`.
   They're convenient for me, but know what they do before you use them.
@@ -544,6 +567,7 @@ If you don't use it, just remove it from `brews` in your copy.
 - `tests/` - behavior tests; run one with `bash tests/<name>.test.sh`.
 - `tools/ixia-marketplace.sh` - keeps the shallow clone of the Ixia plugin marketplace that Pi loads on demand (see [Ixia plugins](#ixia-plugins-claude-code-and-pi)).
 - `activation/claude-config.sh` - the activation steps that install the Claude Code files into `$CLAUDE_CONFIG_DIR` when it points somewhere other than `~/.claude` (see [Devcontainers](#devcontainers)).
+- `activation/pi-memory.sh` - the activation step that links `home/AGENTS.md` into `$PI_CODING_AGENT_DIR` when it points somewhere other than `~/.pi/agent` (see [Devcontainers](#devcontainers)).
 - `rebuild.sh` - re-applies the config after the first switch.
   Auto-detects a devcontainer and picks the container profile; otherwise uses the workstation profile. Run this every time you make a change; to pick up pushed changes on WSL2, pull first (see [Linux](#linux)).
 - `home/` - the actual config files that get symlinked into place; the sections below explain the shared symlink model and Pi's narrower selective setup.
@@ -573,7 +597,7 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 brew install --cask kunchenguid/tap/pi-launcher
 ```
 
-Home Manager owns exactly two repository-authored Pi directories: `~/.pi/agent/themes` and `~/.pi/agent/extensions`. It also links `models.json` and `settings.json` as individual files. The local extension directory is for public, repository-authored extensions only - third-party package code never belongs there. Run `/reload` after editing a local extension or other Pi resources. The terminal-title extension shows a spinner while Pi is working, then a completion mark with the session name or current directory. The `rose-pine-moon` theme was authored clean-room from the public [Rosé Pine Moon palette](https://rosepinetheme.com/palette) and Pi's [public theme schema](https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json), not from a private or live theme file.
+Home Manager owns exactly two repository-authored Pi directories: `~/.pi/agent/themes` and `~/.pi/agent/extensions`. It also links `models.json`, `settings.json` and `AGENTS.md` as individual files; see [Devcontainers](#devcontainers) for user-instruction loading and post-switch verification. The local extension directory is for public, repository-authored extensions only - third-party package code never belongs there. Run `/reload` after editing a local extension or other Pi resources. The terminal-title extension shows a spinner while Pi is working, then a completion mark with the session name or current directory. The `rose-pine-moon` theme was authored clean-room from the public [Rosé Pine Moon palette](https://rosepinetheme.com/palette) and Pi's [public theme schema](https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json), not from a private or live theme file.
 
 ### Pi Calm
 
@@ -617,7 +641,7 @@ On macOS, load the Bitbucket work key into the SSH agent with `ssh-add ~/.ssh/id
   ```
 
 - **Apply**: re-run the dotfiles apply (`hm-update` in the devcontainer, `./rebuild.sh` on the workstation), open a new Zsh session to pick up `pi-ixia`, and restart Claude Code sessions. On macOS, load the work key first as described above. Claude Code then knows the `ixia` marketplace (`/plugin`); follow the project enablement and Pi loading instructions above. Rebuilding the devcontainer does the same through post-create.
-- **The ixia `feedback` skill opens a pull request in Duncan's marketplace repository.** Agents and workers must not run it (nor `/ixia-stratex:feedback`); it is for a person giving feedback. The global agent instructions (`home/AGENTS.md`), loaded by Claude Code, Codex and opencode, say so, and that the plan-gate and review-panel are for IQX Bitbucket work only. Pi does not read that file; `pi-ixia` excludes `feedback` from its per-skill load arguments instead.
+- **The ixia `feedback` skill opens a pull request in Duncan's marketplace repository.** Agents and workers must not run it (nor `/ixia-stratex:feedback`); it is for a person giving feedback. The [shared agent policy](#make-it-yours) says so and limits plan-gate and review-panel to IQX Bitbucket work. `pi-ixia` also excludes `feedback` from its per-skill load arguments.
 
 `bash tests/ixia-plugins.test.sh` and `bash tests/claude-config.test.sh` check the behaviour (local fake repository, no Bitbucket).
 
