@@ -253,6 +253,11 @@ case "$*" in
   --version) echo "$name @VERSION@" ;;
   "setup hooks")
     echo "$name setup hooks" >>"$NODE_TOOLS_LOG"
+    case "$name @VERSION@" in
+      "chrome-devtools-axi 0.1.0" | "chrome-devtools-axi 0.1.22")
+        echo "Unknown command: setup" >&2
+        exit 1 ;;
+    esac
     [ -z "${AXI_FAKE_HOOKS_FAIL-}" ] || { echo "error: cannot write hooks" >&2; exit 1; }
     mkdir -p "$HOME/.claude" "$HOME/.codex" "$HOME/.config/opencode/plugins"
     echo "$name" >>"$HOME/.codex/hooks.json"
@@ -860,16 +865,15 @@ fake_axi_tool() {
 }
 
 test_axi_tools() {
-  local home="$TMP_ROOT/axi" out bin tool
+  local home="$TMP_ROOT/axi" out bin tool version
   mkdir -p "$home"
   bin="$home/.npm-global/bin"
 
   # The devcontainer image or Firstmate's bootstrap already put the tools in
-  # ~/.npm-global: at their floors (gh-axi, tasks-axi, quota-axi, lavish-axi
-  # exactly, chrome-devtools-axi, which has none, at any version) or above them,
+  # ~/.npm-global: at their floors or above them,
   # a switch installs nothing, leaves no second copy, and only repairs hooks.
   fake_axi_tool "$bin" gh-axi 0.1.29
-  fake_axi_tool "$bin" chrome-devtools-axi 0.0.1
+  fake_axi_tool "$bin" chrome-devtools-axi 0.1.23
   fake_axi_tool "$bin" lavish-axi 0.1.80
   fake_axi_tool "$bin" tasks-axi 0.2.6
   fake_axi_tool "$bin" quota-axi 1.0.0
@@ -879,6 +883,22 @@ test_axi_tools() {
   [ "$(calls)" = "$QUIET_RERUN" ] && [ -z "$out" ] || fail "tools at their floors were reinstalled or the switch was noisy: $(calls) $out"
   [ "$("$bin/gh-axi" --version)" = "gh-axi 0.1.29" ] || fail "an AXI tool at its floor was replaced"
   [ ! -e "$home/pnpm/bin/gh-axi" ] && [ ! -e "$home/.local/bin/gh-axi" ] || fail "an AXI tool was duplicated outside npm's global bin"
+  [ "$("$bin/chrome-devtools-axi" --version)" = "chrome-devtools-axi 0.1.23" ] || fail "a setup-compatible Chrome CLI was replaced"
+
+  for version in 0.1.0 0.1.22; do
+    fake_axi_tool "$bin" chrome-devtools-axi "$version"
+    rm "$home/.config/opencode/plugins/axi-chrome-devtools-axi.js"
+    : >"$NODE_TOOLS_LOG"
+    out=$(PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") \
+      || fail "a legacy Chrome CLI was not upgraded before hook setup: $out"
+    [ "$(calls)" = "npm install -g chrome-devtools-axi@latest
+$QUIET_RERUN" ] || fail "a legacy Chrome CLI was not the only tool upgraded: $(calls)"
+    [ "$("$bin/chrome-devtools-axi" --version)" = "chrome-devtools-axi 9.9.9" ] || fail "Chrome stayed at its legacy version"
+    [ -f "$home/.config/opencode/plugins/axi-chrome-devtools-axi.js" ] || fail "upgrading Chrome did not install its hook"
+    : >"$NODE_TOOLS_LOG"
+    out=$(PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") || fail "a switch after upgrading Chrome failed: $out"
+    [ "$(calls)" = "$QUIET_RERUN" ] && [ -z "$out" ] || fail "upgrading Chrome did not converge to a quiet re-switch: $(calls) $out"
+  done
 
   # One patch below a floor, a version that cannot be read, and a missing tool
   # install @latest, each alone, from npm; a newer tool next to them is left.
@@ -912,6 +932,17 @@ $QUIET_RERUN" ] || fail "only the tool below its floor was not reinstalled: $(ca
   assert_contains "$out" "tasks-axi is still missing or below 0.2.6" "a floor miss after the install is not named: $out"
   assert_contains "$out" "axi_tools did not complete" "a floor miss is not reported as a failed step: $out"
 
+  fake_axi_tool "$bin" tasks-axi 0.2.6
+  fake_axi_tool "$bin" chrome-devtools-axi 0.1.0
+  : >"$NODE_TOOLS_LOG"
+  if out=$(NPM_FAKE_AXI_VERSION=0.1.22 PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH"); then
+    fail "a Chrome CLI without setup hooks was accepted after npm install: $out"
+  fi
+  assert_contains "$out" "chrome-devtools-axi is still missing or below 0.1.23" "an incompatible Chrome install was not named: $out"
+  assert_contains "$out" "axi_tools" "an incompatible Chrome install was not a failed provisioning step: $out"
+  [ "$(calls)" = "npm install -g chrome-devtools-axi@latest
+$QUIET_RERUN" ] || fail "an incompatible Chrome install retried or blocked sibling operations: $(calls)"
+
   # A failing npm install is reported and does not stop the other steps.
   home="$TMP_ROOT/axi-fail"
   mkdir -p "$home"
@@ -930,7 +961,15 @@ $QUIET_RERUN" ] || fail "only the tool below its floor was not reinstalled: $(ca
   for tool in gh-axi chrome-devtools-axi lavish-axi tasks-axi quota-axi; do
     [ "$("$home/.nvm/default/bin/$tool" --version)" = "$tool 9.9.9" ] || fail "workstation: $tool is not in nvm's default Node.js bin"
   done
-  pass "AXI tools: installed at @latest into npm's global prefix when missing or below Firstmate's floors, in one call; left alone at or above them (no second copy next to the image's or Firstmate's); a floor missed after the install is reported; a failing install does not stop the other steps; the workstation uses nvm's prefix"
+  fake_axi_tool "$home/.nvm/default/bin" chrome-devtools-axi 0.1.0
+  rm "$home/.config/opencode/plugins/axi-chrome-devtools-axi.js"
+  : >"$NODE_TOOLS_LOG"
+  out=$(run_tools "$home" workstation "$BASE_PATH") || fail "workstation did not upgrade legacy Chrome before hook setup: $out"
+  [ "$(calls)" = "npm install -g chrome-devtools-axi@latest
+$QUIET_RERUN" ] || fail "workstation did not upgrade only legacy Chrome: $(calls)"
+  [ "$("$home/.nvm/default/bin/chrome-devtools-axi" --version)" = "chrome-devtools-axi 9.9.9" ] \
+    && [ -f "$home/.config/opencode/plugins/axi-chrome-devtools-axi.js" ] || fail "workstation did not upgrade Chrome and install its hook"
+  pass "AXI tools: installed at @latest into npm's global prefix when missing or below their floors, in one call; left alone at or above them (no second copy next to the image's or Firstmate's); a floor missed after the install is reported; a failing install does not stop the other steps; the workstation uses nvm's prefix"
 }
 
 test_axi_hooks() {

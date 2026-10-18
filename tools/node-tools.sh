@@ -30,8 +30,8 @@
 #   On amd64 also @sap/cf-tools-local (--allow-scripts=@sap/cf-tools-local);
 # - the AXI tools Firstmate uses: gh-axi, chrome-devtools-axi, lavish-axi,
 #   tasks-axi, and quota-axi, also npm globals but installed at @latest when
-#   missing or below the version floors in AXI_TOOLS (copied from Firstmate's
-#   own bootstrap; they are never downgraded or pinned). Then `setup hooks`
+#   missing or below the version floors in AXI_TOOLS (never downgraded or
+#   pinned). Then `setup hooks`
 #   for gh-axi, chrome-devtools-axi, and lavish-axi, which writes SessionStart
 #   hooks for Claude Code, Codex, OpenCode (and, for lavish-axi, the Copilot
 #   CLI). Claude Code's settings.json is Home Manager's (home/.claude/
@@ -82,11 +82,8 @@ YO_NAMESPACES=(easy-ui5 @sap-ux/adp @sap/adaptation-project @sap/add-hdb-module 
   @sap/base-mta-module @sap/cap-project @sap/fiori)
 MATTPOCOCK_RESOLVING_MERGE_CONFLICTS=https://github.com/mattpocock/skills/tree/153fc1b93de6584562765cdce299324e1ff9e661/skills/engineering/resolving-merge-conflicts
 SKILLS_DIR=$HOME/.agents/skills
-# tool:minimum version, from Firstmate's bin/fm-bootstrap.sh and the
-# bin/fm-tasks-axi-lib.sh and bin/fm-quota-axi-lib.sh it sources. The floors
-# follow Firstmate's axi-family policy (the latest release when they were
-# last bumped), so raise them there first; chrome-devtools-axi has none.
-AXI_TOOLS=(gh-axi:0.1.29 chrome-devtools-axi: lavish-axi:0.1.80 tasks-axi:0.2.6 quota-axi:0.1.51)
+# tool:minimum version.
+AXI_TOOLS=(gh-axi:0.1.29 chrome-devtools-axi:0.1.23 lavish-axi:0.1.80 tasks-axi:0.2.6 quota-axi:0.1.51)
 AXI_HOOK_TOOLS=(gh-axi chrome-devtools-axi lavish-axi)
 
 problems=()
@@ -287,12 +284,10 @@ version_at_least() {
   [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | sed -n 1p)" = "$2" ]
 }
 
-# True when the AXI tool $1 is on PATH and, with a floor ($2), reports at
-# least that version; a version that cannot be read is below the floor.
+# True when the AXI tool $1 reports at least version $2;
+# a version that cannot be read is below the floor.
 axi_tool_current() {
   local have
-  command -v "$1" >/dev/null 2>&1 || return 1
-  [ -n "$2" ] || return 0
   have=$(tool_version "$1") || return 1
   version_at_least "$have" "$2"
 }
@@ -313,7 +308,7 @@ ensure_axi_tools() {
     tool=${entry%%:*}
     min=${entry#*:}
     axi_tool_current "$tool" "$min" \
-      || oops "$tool is still missing or below ${min:-its floor} after npm install -g (is npm's global bin on PATH?)" || return 1
+      || oops "$tool is still missing or below $min after npm install -g (is npm's global bin on PATH?)" || return 1
   done
 }
 
