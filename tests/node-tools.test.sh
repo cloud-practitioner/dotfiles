@@ -36,8 +36,9 @@
 #   exactly the Dockerfile's arguments, the npm globals with
 #   --allow-scripts=mbt,mta into nvm's prefix (found by yo, bins in
 #   $NVM_DIR/default/bin), @sap/cf-tools-local on amd64, and one yo smoke
-#   check; then bash-tools' five installers, each without a controlling
-#   terminal where needed; a re-run of both installs and prints nothing;
+#   check; then bash-tools' six vendor installers (including treehouse), each
+#   without a controlling terminal where needed; a re-run of both installs
+#   nothing and prints nothing;
 # - only what is missing is installed again (a missing pnpm or npm global, a
 #   missing skill group), and mattpocock's resolving-merge-conflicts always
 #   follows its repo's install, so the pinned copy wins;
@@ -722,7 +723,7 @@ test_container_and_failures() {
   [ ! -e "$home/.nvm" ] || fail "container installed nvm"
   : >"$NODE_TOOLS_LOG"
   out="$out$(PNPM_HOME="$home/pnpm-home" run_bash_tools "$home" "$FIX/image:$BASE_PATH")" || fail "container bash-tools failed: $out"
-  [ "$(calls)" = "$(bash_installs "$home")" ] || fail "container bash-tools did not only run the five installers: $(calls)"
+  [ "$(calls)" = "$(bash_installs "$home")" ] || fail "container bash-tools did not only run the six vendor installers (including treehouse): $(calls)"
   for tool in herdr pi copilot claude agy; do
     [ -x "$home/.local/bin/$tool" ] || fail "container did not install $tool into ~/.local/bin"
   done
@@ -740,7 +741,7 @@ test_container_and_failures() {
   [ -x "$home/custom/bin/yo" ] && [ ! -e "$home/.npm-global" ] || fail "container ignored NPM_CONFIG_PREFIX"
 
   # No pnpm: node-tools stops with clear warnings, nothing is installed,
-  # and bash-tools still installs all five.
+  # and bash-tools still runs all six vendor installers (including treehouse).
   home="$TMP_ROOT/ct-nopnpm"
   mkdir -p "$home"
   : >"$NODE_TOOLS_LOG"
@@ -751,7 +752,7 @@ test_container_and_failures() {
   assert_contains "$out" "deny list is unproven because the policy check did not run" "missing pnpm hid the unproven FAB policy: $out"
   [ -z "$(calls)" ] || fail "node-tools installed something without pnpm: $(calls)"
   out=$(run_bash_tools "$home" "$BASE_PATH") || fail "bash-tools without pnpm failed: $out"
-  [ "$(calls)" = "$(bash_installs "$home")" ] || fail "bash-tools without pnpm did not install the five CLIs: $(calls)"
+  [ "$(calls)" = "$(bash_installs "$home")" ] || fail "bash-tools without pnpm did not install the six vendor CLIs (including treehouse): $(calls)"
 
   if out=$(NVM_INSTALL_URL="file://$TMP_ROOT/missing.sh" run_tools "$TMP_ROOT/ws-offline" workstation "$BASE_PATH"); then
     fail "workstation without the nvm install script succeeded: $out"
