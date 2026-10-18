@@ -7,12 +7,14 @@
 #   curl -fsSL https://pi.dev/install.sh | sh                     (Pi)
 #   curl -fsSL https://gh.io/copilot-install | bash               (GitHub Copilot CLI)
 #   curl -fsSL https://claude.ai/install.sh | bash                (Claude Code)
+#   curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh
+#                                                                 (treehouse)
 #   Antigravity CLI: see ensure_antigravity below for its download and isolation.
 #
 # All are unpinned, so their own updaters keep them current. Each launcher
 # ends up in ~/.local/bin, which home.nix puts first on PATH, and must answer
-# `--version` after it is installed (herdr, pi, copilot, claude, and agy for
-# Antigravity). Pi, Copilot, and Antigravity run without a controlling terminal
+# `--version` after it is installed (herdr, pi, copilot, claude, agy for
+# Antigravity, and treehouse). Pi, Copilot, and Antigravity run without a controlling terminal
 # (setsid) to prevent prompts; Antigravity's rc-file isolation is described below.
 #
 # herdr's installer puts its static release binary, checked against the
@@ -41,6 +43,15 @@
 # is removed afterwards, so the files Home Manager owns stay untouched. `agy`
 # updates itself in the background.
 #
+# treehouse (isolated worker worktrees, one of Firstmate's tools; the rest are
+# npm globals in tools/node-tools.sh) is the vendor's release binary at
+# ~/.local/bin/treehouse, which `treehouse update` replaces in place. Its
+# installer picks ~/.local/bin only when that directory is on its PATH and
+# otherwise falls back to /usr/local/bin with sudo, so it runs with
+# ~/.local/bin first on PATH. Firstmate needs `treehouse get --lease`, so a
+# treehouse without it (an older release) is installed again, the one
+# case where this script upgrades a CLI that is already there.
+#
 # Every step skips what is already installed and prints nothing then. A step
 # that fails does not stop the others; the script then exits non-zero with
 # one clear message per failure, which the Home Manager activation turns into
@@ -53,8 +64,8 @@
 # Usage: tools/bash-tools.sh
 # NVM_DIR (default ~/.nvm), PNPM_HOME (default ${XDG_DATA_HOME:-~/.local/share}/pnpm,
 # as pnpm itself), HERDR_INSTALL_URL, PI_INSTALL_URL, COPILOT_INSTALL_URL,
-# CLAUDE_INSTALL_URL, and ANTIGRAVITY_INSTALL_URL can be overridden; the tests
-# point them at local fixtures.
+# CLAUDE_INSTALL_URL, ANTIGRAVITY_INSTALL_URL, and TREEHOUSE_INSTALL_URL can be
+# overridden; the tests point them at local fixtures.
 set -euo pipefail
 
 HERDR_INSTALL_URL=${HERDR_INSTALL_URL:-https://herdr.dev/install.sh}
@@ -62,6 +73,7 @@ PI_INSTALL_URL=${PI_INSTALL_URL:-https://pi.dev/install.sh}
 COPILOT_INSTALL_URL=${COPILOT_INSTALL_URL:-https://gh.io/copilot-install}
 CLAUDE_INSTALL_URL=${CLAUDE_INSTALL_URL:-https://claude.ai/install.sh}
 ANTIGRAVITY_INSTALL_URL=${ANTIGRAVITY_INSTALL_URL:-https://antigravity.google/cli/install.sh}
+TREEHOUSE_INSTALL_URL=${TREEHOUSE_INSTALL_URL:-https://kunchenguid.github.io/treehouse/install.sh}
 # home.nix sets the same defaults for the shells (nodePath).
 export NVM_DIR=${NVM_DIR:-$HOME/.nvm}
 export PNPM_HOME=${PNPM_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/pnpm}
@@ -201,6 +213,29 @@ ensure_antigravity() {
   "$bin" --version >/dev/null 2>&1 </dev/null || oops "$bin --version fails after the Antigravity installer" || return 1
 }
 
+# True when the treehouse $1 supports `get --lease` (the durable, non-interactive
+# acquire Firstmate relies on), by the same test as Firstmate's bootstrap.
+treehouse_has_lease() {
+  local out
+  out=$("$1" get --help 2>&1 </dev/null) || true
+  grep -Eq '(^|[^[:alnum:]_-])--lease([^[:alnum:]_-]|$)' <<<"$out"
+}
+
+# treehouse from its vendor's installer, unless ~/.local/bin/treehouse is
+# already there and supports `get --lease`.
+ensure_treehouse() {
+  local bin=$HOME/.local/bin/treehouse
+  if [ -x "$bin" ] && treehouse_has_lease "$bin"; then return 0; fi
+  command -v curl >/dev/null 2>&1 || oops "curl is required to install treehouse" || return 1
+  mkdir -p "$HOME/.local/bin"
+  say "installing treehouse with its vendor's installer"
+  curl -fsSL --proto-redir '=https' "$TREEHOUSE_INSTALL_URL" | PATH="$HOME/.local/bin:$PATH" sh >/dev/null \
+    || oops "cannot install treehouse from $TREEHOUSE_INSTALL_URL (offline?)" || return 1
+  [ -x "$bin" ] || oops "the treehouse installer did not create $bin" || return 1
+  "$bin" --version >/dev/null 2>&1 </dev/null || oops "$bin --version fails after the treehouse installer" || return 1
+  treehouse_has_lease "$bin" || oops "$bin does not support 'treehouse get --lease' after the treehouse installer" || return 1
+}
+
 main() {
   local msg
   # pnpm refuses global commands while its global bin directory is not on
@@ -214,6 +249,7 @@ main() {
   step ensure_copilot
   step ensure_claude
   step ensure_antigravity
+  step ensure_treehouse
   [ "${#problems[@]}" -eq 0 ] || {
     msg="${problems[*]}"
     printf 'bash-tools: failed: %s\n' "${msg//ensure_/}" >&2
