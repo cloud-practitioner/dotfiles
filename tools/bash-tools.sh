@@ -52,10 +52,10 @@
 # treehouse without it (an older release) is installed again, the one
 # case where this script upgrades a CLI that is already there.
 #
-# Every step skips what is already installed and prints nothing then. A step
-# that fails does not stop the others; the script then exits non-zero with
-# one clear message per failure, which the Home Manager activation turns into
-# a warning so the switch still completes.
+# For presence checks and re-switch behavior, see README.md's "Upstream CLI
+# tools" section. A failing step does not stop the others; the script exits
+# non-zero with one clear message per failure, which the Home Manager
+# activation turns into a warning so the switch still completes.
 #
 # Node.js, npm, and pnpm come from tools/node-tools.sh, which runs first: this
 # script only adds $NVM_DIR/default/bin (the workstation's nvm default Node.js,

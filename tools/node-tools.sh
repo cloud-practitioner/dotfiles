@@ -2,8 +2,7 @@
 # The npm and pnpm tools that Home Manager installs at switch time on Linux
 # (home.nix `home.activation.nodeTools`), outside the Nix store, unpinned
 # (@latest), in both profiles (workstation and container). The curl-installer
-# CLIs (herdr, Claude Code, Pi, Copilot, Antigravity) are tools/bash-tools.sh,
-# which runs after this script.
+# CLIs are installed by tools/bash-tools.sh, which runs after this script.
 #
 # Node.js and pnpm first:
 # - workstation (WSL2): nvm from its official install script, then Node.js LTS
