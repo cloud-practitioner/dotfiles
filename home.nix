@@ -19,8 +19,8 @@ let
   # without it, once each, so they win over the Nix profile's, the system's,
   # and WSL's Windows-interop (/mnt/*) copies: ~/.local/bin first (herdr from
   # its vendor's installer, ahead of a Nix-built herdr from an older switch,
-  # and the launchers of Claude Code, Pi, the GitHub Copilot CLI, and
-  # Antigravity from their own installers, ahead of any npm or pnpm copy),
+  # and the other vendor CLI launchers listed in tools/bash-tools.sh,
+  # ahead of any npm or pnpm copy),
   # then, on the workstation, $NVM_DIR/default/bin (nvm's default Node.js,
   # npm, and pnpm, linked by tools/node-tools.sh, and also npm's global bin
   # there), or, in a container, $NPM_CONFIG_PREFIX/bin (npm's global bin; the
@@ -76,9 +76,9 @@ in
     nerd-fonts.hack
   ] ++ lib.optionals stdenv.isLinux [
     # Linux equivalents of the macOS Homebrew casks/brews in configuration.nix.
-    # herdr, Claude Code, Pi, the GitHub Copilot CLI, and Antigravity are not
-    # Nix packages: the bashTools activation below installs them unpinned.
+    # Vendor-installed CLIs stay outside Nix; see tools/bash-tools.sh.
     wezterm
+    gh        # gh-axi (node-tools activation) wraps it
   ] ++ lib.optionals (stdenv.isLinux && isWorkstation) [
     # Build/run devcontainers from the CLI; needs a Docker host.
     devcontainer
@@ -99,23 +99,17 @@ in
     '';
   };
 
-  # The toolchain, unpinned, installed at every Linux switch when missing, by
-  # two scripts that each warn on failure but never fail the switch (the next
-  # switch retries):
-  # - nodeTools (tools/node-tools.sh) first: Node.js and pnpm (the WSL2
-  #   workstation gets nvm, Node.js LTS as nvm's default, and pnpm; a
-  #   container uses its image's Node.js and pnpm), then the pnpm and npm
-  #   global packages and the agent skills;
-  # - bashTools (tools/bash-tools.sh) after it, since Pi's installer needs
-  #   Node.js: herdr, Claude Code, Pi, the GitHub Copilot CLI, and Antigravity
-  #   from their own curl installers.
+  # The two Linux installers warn on failure so a later switch can retry.
+  # nodeTools must precede bashTools because Pi's installer needs Node.js.
+  # README's "Upstream CLI tools" section owns installation and refresh behavior;
+  # tools/node-tools.sh and tools/bash-tools.sh own their install lists.
   home.activation.nodeTools = lib.mkIf pkgs.stdenv.isLinux (
     lib.hm.dag.entryAfter [ "writeBoundary" ] ''
       if ! run env PATH="${lib.makeBinPath (with pkgs; [
           bash coreutils curl findutils gawk git gnugrep gnused gnutar gzip util-linux xz
         ])}:$PATH" \
         ${pkgs.bash}/bin/bash ${./tools/node-tools.sh} ${if isWorkstation then "workstation" else "container"}; then
-        warnEcho "tools/node-tools.sh failed (see above): ${if isWorkstation then "nvm, Node.js, " else ""}pnpm, the pnpm or npm global tools (arc-1, ui5, cds, mbt, yo and its generators, ...), or the agent skills may be missing. Fix that, then switch again."
+        warnEcho "tools/node-tools.sh failed (see above): ${if isWorkstation then "nvm, Node.js, " else ""}pnpm, the pnpm or npm global tools (arc-1, ui5, cds, mbt, yo and its generators, ...), the AXI worker-orchestration tools (gh-axi, chrome-devtools-axi, lavish-axi, tasks-axi, quota-axi) or their agent hooks, or the agent skills may be missing. Fix that, then switch again."
       fi
     ''
   );
@@ -134,7 +128,7 @@ in
           bash coreutils curl findutils gawk git gnugrep gnused gnutar gzip util-linux xz
         ])}:$PATH" \
         ${pkgs.bash}/bin/bash ${./tools/bash-tools.sh}; then
-        warnEcho "tools/bash-tools.sh failed (see above): herdr, Claude Code, Pi, the GitHub Copilot CLI, or Antigravity may be missing. Fix that, then switch again."
+        warnEcho "tools/bash-tools.sh failed (see above): herdr, Claude Code, Pi, the GitHub Copilot CLI, Antigravity, or treehouse may be missing. Fix that, then switch again."
       fi
     ''
   );

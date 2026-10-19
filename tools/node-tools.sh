@@ -2,8 +2,7 @@
 # The npm and pnpm tools that Home Manager installs at switch time on Linux
 # (home.nix `home.activation.nodeTools`), outside the Nix store, unpinned
 # (@latest), in both profiles (workstation and container). The curl-installer
-# CLIs (herdr, Claude Code, Pi, Copilot, Antigravity) are tools/bash-tools.sh,
-# which runs after this script.
+# CLIs are installed by tools/bash-tools.sh, which runs after this script.
 #
 # Node.js and pnpm first:
 # - workstation (WSL2): nvm from its official install script, then Node.js LTS
@@ -28,6 +27,15 @@
 #   --allow-scripts=mbt,mta (only they run install scripts). They go to npm,
 #   not pnpm, because yo only discovers generators under npm's global prefix.
 #   On amd64 also @sap/cf-tools-local (--allow-scripts=@sap/cf-tools-local);
+# - the AXI tools Firstmate uses: gh-axi, chrome-devtools-axi, lavish-axi,
+#   tasks-axi, and quota-axi, also npm globals but installed at @latest when
+#   missing or below the version floors in AXI_TOOLS (never downgraded or
+#   pinned). Then `setup hooks`
+#   for gh-axi, chrome-devtools-axi, and lavish-axi, which writes SessionStart
+#   hooks for Claude Code, Codex, OpenCode (and, for lavish-axi, the Copilot
+#   CLI). Claude Code's settings.json is Home Manager's (home/.claude/
+#   settings.json declares those three hooks), so the script puts it back
+#   exactly as it was;
 # - agent skills for every agent (`npx --yes skills add ... --agent universal
 #   --yes --global`, which fills ~/.agents/skills): arc-mcp/arc-1,
 #   mattpocock/skills, vercel-labs/skills (find-skills only), and the
@@ -73,6 +81,9 @@ YO_NAMESPACES=(easy-ui5 @sap-ux/adp @sap/adaptation-project @sap/add-hdb-module 
   @sap/base-mta-module @sap/cap-project @sap/fiori)
 MATTPOCOCK_RESOLVING_MERGE_CONFLICTS=https://github.com/mattpocock/skills/tree/153fc1b93de6584562765cdce299324e1ff9e661/skills/engineering/resolving-merge-conflicts
 SKILLS_DIR=$HOME/.agents/skills
+# tool:minimum version.
+AXI_TOOLS=(gh-axi:0.1.29 chrome-devtools-axi:0.1.23 lavish-axi:0.1.80 tasks-axi:0.2.6 quota-axi:0.1.51)
+AXI_HOOK_TOOLS=(gh-axi chrome-devtools-axi lavish-axi)
 
 problems=()
 
@@ -257,6 +268,86 @@ ensure_npm_globals() {
   npm_install_missing "${NPM_PACKAGES[@]}"
 }
 
+# The first x.y.z of `$1 --version`; fails when $1 is missing or prints none.
+tool_version() {
+  local out version
+  command -v "$1" >/dev/null 2>&1 || return 1
+  out=$("$1" --version 2>/dev/null </dev/null) || return 1
+  version=$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' <<<"$out" | sed -n 1p)
+  [ -n "$version" ] || return 1
+  printf '%s\n' "$version"
+}
+
+# True when version $1 is at least $2.
+version_at_least() {
+  [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | sed -n 1p)" = "$2" ]
+}
+
+# True when the AXI tool $1 reports at least version $2;
+# a version that cannot be read is below the floor.
+axi_tool_current() {
+  local have
+  have=$(tool_version "$1") || return 1
+  version_at_least "$have" "$2"
+}
+
+# Firstmate's AXI tools, npm globals installed at @latest when missing or below
+# their floor, then checked against it.
+ensure_axi_tools() {
+  local entry tool min names=()
+  for entry in "${AXI_TOOLS[@]}"; do
+    tool=${entry%%:*}
+    min=${entry#*:}
+    axi_tool_current "$tool" "$min" || names+=("$tool@latest")
+  done
+  [ "${#names[@]}" -gt 0 ] || return 0
+  say "npm install -g ${names[*]}"
+  npm install -g "${names[@]}" >/dev/null || oops "npm install -g ${names[*]} failed (offline?)" || return 1
+  for entry in "${AXI_TOOLS[@]}"; do
+    tool=${entry%%:*}
+    min=${entry#*:}
+    axi_tool_current "$tool" "$min" \
+      || oops "$tool is still missing or below $min after npm install -g (is npm's global bin on PATH?)" || return 1
+  done
+}
+
+# `<tool> setup hooks` for the AXI tools that have it, on every switch: it is
+# idempotent, writes nothing when the hooks are current, and repairs them when
+# they are stale. It writes to ~/.claude/settings.json (a Home Manager link
+# into home/.claude/settings.json, which already declares all three hooks),
+# ~/.codex, ~/.config/opencode/plugins, and the Copilot CLI's hooks directory.
+# Home Manager owns the Claude file, and a switch that ran before its link
+# existed would leave a plain file there for the next switch to collide with,
+# so it is restored to what it was, or removed if it was not there.
+ensure_axi_hooks() {
+  local tool out settings=$HOME/.claude/settings.json saved="" now had=0 failed=0
+  # The trailing x keeps the file's trailing newlines through $(...).
+  if [ -e "$settings" ]; then
+    had=1
+    saved=$(cat "$settings"; printf x) || oops "cannot read $settings" || return 1
+  fi
+  for tool in "${AXI_HOOK_TOOLS[@]}"; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+      oops "$tool is not on PATH; cannot set up its agent hooks" || failed=1
+      continue
+    fi
+    out=$("$tool" setup hooks 2>&1 </dev/null) || {
+      printf '%s\n' "$out" >&2
+      oops "$tool setup hooks failed" || failed=1
+    }
+  done
+  if [ "$had" -eq 1 ]; then
+    now=$(cat "$settings"; printf x) || oops "cannot read $settings" || return 1
+    if [ "$now" != "$saved" ]; then
+      printf '%s' "${saved%x}" >"$settings" || oops "cannot restore $settings" || failed=1
+      say "kept $settings as Home Manager declares it"
+    fi
+  elif [ -f "$settings" ] && [ ! -L "$settings" ]; then
+    rm -f "$settings" || oops "cannot remove $settings" || failed=1
+  fi
+  return "$failed"
+}
+
 # @sap/cf-tools-local only has an amd64 build.
 ensure_cf_tools_local() {
   case "$(uname -m)" in
@@ -409,6 +500,8 @@ main() {
   step ensure_skills
   step ensure_npm_globals
   step ensure_cf_tools_local
+  step ensure_axi_tools
+  step ensure_axi_hooks
   smoke_checks
   [ "${#problems[@]}" -eq 0 ] || {
     printf 'node-tools: %s did not complete (see above)\n' "$(IFS=,; echo "${problems[*]//ensure_/}")" >&2

@@ -5,9 +5,11 @@
 # - tools/node-tools.sh: on the WSL2 workstation nvm, Node.js LTS as nvm's
 #   default, and pnpm (the container uses its image's), then the pnpm globals,
 #   the npm globals (yo, mbt, mta, and the generators), @sap/cf-tools-local
-#   on amd64, and the agent skills;
-# - tools/bash-tools.sh: herdr, Pi, the GitHub Copilot CLI, Claude Code, and
-#   Antigravity from their own installers.
+#   on amd64, the AXI tools Firstmate uses (gh-axi, chrome-devtools-axi,
+#   lavish-axi, tasks-axi, quota-axi) and their `setup hooks`, and the agent
+#   skills;
+# - tools/bash-tools.sh: herdr, Pi, the GitHub Copilot CLI, Claude Code,
+#   Antigravity, and treehouse from their own installers.
 #
 # nvm, its install script, npm, npx, pnpm, yo, mbt, mta, cf, and the herdr, Pi,
 # Copilot, Claude Code, and Antigravity install scripts are local fakes that
@@ -34,8 +36,9 @@
 #   exactly the Dockerfile's arguments, the npm globals with
 #   --allow-scripts=mbt,mta into nvm's prefix (found by yo, bins in
 #   $NVM_DIR/default/bin), @sap/cf-tools-local on amd64, and one yo smoke
-#   check; then bash-tools' five installers, each without a controlling
-#   terminal where needed; a re-run of both installs and prints nothing;
+#   check; then bash-tools' six vendor installers (including treehouse), each
+#   without a controlling terminal where needed; a re-run of both installs
+#   nothing and prints nothing;
 # - only what is missing is installed again (a missing pnpm or npm global, a
 #   missing skill group), and mattpocock's resolving-merge-conflicts always
 #   follows its repo's install, so the pinned copy wins;
@@ -88,6 +91,7 @@ PI_INSTALL="pi-installer tty=no"
 COPILOT_INSTALL="copilot-installer tty=no"
 HERDR_INSTALL="herdr-installer"
 CLAUDE_INSTALL="claude-installer"
+TREEHOUSE_INSTALL="treehouse-installer"
 AGY_INSTALL="antigravity-installer tty=no dir=%HOME%/.local/bin"
 PI_REMOVE="pnpm remove -g @earendil-works/pi-coding-agent"
 COPILOT_REMOVE="pnpm remove -g @github/copilot"
@@ -190,6 +194,16 @@ case "\$1 \$2" in
         pnpm) mkdir -p "\$prefix/bin"; cp "$FIX/pnpm" "\$prefix/bin/pnpm"; continue ;;
       esac
       [ -z "\${NPM_FAKE_FAIL-}" ] || { echo "npm ERR! network" >&2; exit 1; }
+      case "\$pkg" in
+        gh-axi@latest | chrome-devtools-axi@latest | lavish-axi@latest | tasks-axi@latest | quota-axi@latest)
+          pkg=\${pkg%@latest}
+          mkdir -p "\$prefix/lib/node_modules/\$pkg" "\$prefix/bin"
+          echo '{}' >"\$prefix/lib/node_modules/\$pkg/package.json"
+          # NPM_FAKE_AXI_VERSION is what the registry's latest is.
+          sed "s/@VERSION@/\${NPM_FAKE_AXI_VERSION:-9.9.9}/" "$FIX/fake-axi" >"\$prefix/bin/\$pkg"
+          chmod +x "\$prefix/bin/\$pkg"
+          continue ;;
+      esac
       mkdir -p "\$prefix/lib/node_modules/\$pkg" "\$prefix/bin"
       echo '{}' >"\$prefix/lib/node_modules/\$pkg/package.json"
       case "\$pkg" in
@@ -223,6 +237,40 @@ for dir in "$root"/generator-* "$root"/@*/generator-*; do
   ns=$(printf '%s\n' "${dir#"$root"/}" | sed 's|generator-||')
   [ "$ns" = "${YO_FAKE_HIDE-}" ] || echo "  $ns"
 done
+EOF
+
+# The fake AXI tools (gh-axi, chrome-devtools-axi, lavish-axi, tasks-axi,
+# quota-axi) the fake npm installs: `--version` prints the baked-in version and
+# `setup hooks` logs the call and writes what the real one writes: a codex
+# hook, an OpenCode plugin, and, like axi-sdk-js, the Claude Code hook into
+# ~/.claude/settings.json (through a link, as Home Manager's is), creating the
+# file if it is missing, and only when its command is not already there.
+# AXI_FAKE_CLAUDE_REWRITE makes it rewrite an existing Claude hook (what the
+# real one does when it is not run from PATH) and AXI_FAKE_HOOKS_FAIL fails it.
+cat >"$FIX/fake-axi" <<'EOF'
+#!/bin/sh
+name=$(basename "$0")
+case "$*" in
+  --version) echo "$name @VERSION@" ;;
+  "setup hooks")
+    echo "$name setup hooks" >>"$NODE_TOOLS_LOG"
+    case "$name @VERSION@" in
+      "chrome-devtools-axi 0.1.0" | "chrome-devtools-axi 0.1.22")
+        echo "Unknown command: setup" >&2
+        exit 1 ;;
+    esac
+    [ -z "${AXI_FAKE_HOOKS_FAIL-}" ] || { echo "error: cannot write hooks" >&2; exit 1; }
+    mkdir -p "$HOME/.claude" "$HOME/.codex" "$HOME/.config/opencode/plugins"
+    echo "$name" >>"$HOME/.codex/hooks.json"
+    echo "$name" >"$HOME/.config/opencode/plugins/axi-$name.js"
+    if [ -n "${AXI_FAKE_CLAUDE_REWRITE-}" ]; then
+      echo "rewritten by $name" >>"$HOME/.claude/settings.json"
+    elif ! grep -q "\"command\": \"$name\"" "$HOME/.claude/settings.json" 2>/dev/null; then
+      echo "\"command\": \"$name\"" >>"$HOME/.claude/settings.json"
+    fi
+    echo "hooks:"; echo "  status: installed" ;;
+  *) echo "fake $name: unexpected: $*" >&2; exit 1 ;;
+esac
 EOF
 
 # A fake pnpm 11+: global bins go to $PNPM_HOME/bin, which must be on PATH, and
@@ -362,6 +410,37 @@ chmod +x "$versions/9.9.9"
 ln -sfn "$versions/9.9.9" "$HOME/.local/bin/claude"
 EOF
 
+# A stand-in for treehouse's install script (run with sh): like the real one, it
+# installs into ~/.local/bin only when that is on its PATH (else it would use
+# /usr/local/bin with sudo). The fake treehouse's `get --help` mentions --lease
+# unless TREEHOUSE_FAKE_OLD is set when it is installed.
+cat >"$FIX/treehouse-install.sh" <<'EOF'
+set -e
+echo treehouse-installer >>"$NODE_TOOLS_LOG"
+case ":$PATH:" in
+  *":$HOME/.local/bin:"*) ;;
+  *) echo "fake treehouse installer: would install into /usr/local/bin" >&2; exit 1 ;;
+esac
+[ -z "${TREEHOUSE_FAKE_FAIL:-}" ] || { echo "Failed to determine latest version"; exit 1; }
+mkdir -p "$HOME/.local/bin"
+if [ -n "${TREEHOUSE_FAKE_OLD:-}" ]; then
+  version=2.0.0
+  help="Acquire a worktree from the pool."
+else
+  version=3.1.4
+  help="Pass --lease for a non-interactive, durable acquire."
+fi
+cat >"$HOME/.local/bin/treehouse" <<TREEHOUSE
+#!/bin/sh
+case "\$*" in
+  --version) echo "treehouse version $version" ;;
+  "get --help") echo "$help" ;;
+  *) echo "fake treehouse: unexpected: \$*" >&2; exit 1 ;;
+esac
+TREEHOUSE
+chmod +x "$HOME/.local/bin/treehouse"
+EOF
+
 # A stand-in for Pi's install script (run with sh): like the real one, it
 # refuses a pi on PATH that is not its own managed install, keeps its launcher
 # in ~/.pi/agent/bin, and links it from ~/.local/bin, the first of its
@@ -498,6 +577,9 @@ export PI_INSTALL_URL="file://$FIX/pi-install.sh"
 export COPILOT_INSTALL_URL="file://$FIX/copilot-install.sh"
 export CLAUDE_INSTALL_URL="file://$FIX/claude-install.sh"
 export ANTIGRAVITY_INSTALL_URL="file://$FIX/antigravity-install.sh"
+export TREEHOUSE_INSTALL_URL="file://$FIX/treehouse-install.sh"
+# Hooks go to scratch homes only; the Copilot CLI's hooks directory follows HOME.
+unset COPILOT_HOME
 mkdir -p "$FIX/common"
 cp "$FIX/cf" "$FIX/common/cf"
 BASE_PATH="$FIX/arc1:$FIX/common:/usr/bin:/bin"
@@ -530,6 +612,13 @@ npx --yes skills add https://github.com/mattpocock/skills/tree/153fc1b93de658456
 NPM_ADD="npm install -g --allow-scripts=mbt,mta mbt mta yo generator-easy-ui5 @sap-ux/generator-adp @sap/generator-adaptation-project @sap/generator-add-hdb-module @sap/generator-aicore @sap/generator-base-mta-module @sap/generator-cap-project @sap/generator-fiori"
 CF_LOCAL_ADD="npm install -g --allow-scripts=@sap/cf-tools-local @sap/cf-tools-local"
 YO_SMOKE="yo --generators --no-insight"
+AXI_ADD="npm install -g gh-axi@latest chrome-devtools-axi@latest lavish-axi@latest tasks-axi@latest quota-axi@latest"
+AXI_HOOKS="gh-axi setup hooks
+chrome-devtools-axi setup hooks
+lavish-axi setup hooks"
+# What every node-tools.sh run does once everything is installed.
+QUIET_RERUN="$AXI_HOOKS
+$YO_SMOKE"
 case "$(uname -m)" in
   x86_64 | amd64) AMD64=yes ;;
   *) AMD64= ;;
@@ -539,10 +628,11 @@ NODE_INSTALLS="$PNPM_ADD
 $SKILLS_ADD
 $NPM_ADD${AMD64:+
 $CF_LOCAL_ADD}
-$YO_SMOKE"
+$AXI_ADD
+$QUIET_RERUN"
 # What bash-tools.sh installs for HOME $1.
 bash_installs() {
-  printf '%s\n' "$HERDR_INSTALL" "$PI_INSTALL" "$COPILOT_INSTALL" "$CLAUDE_INSTALL" "$(agy_install_line "$1")"
+  printf '%s\n' "$HERDR_INSTALL" "$PI_INSTALL" "$COPILOT_INSTALL" "$CLAUDE_INSTALL" "$(agy_install_line "$1")" "$TREEHOUSE_INSTALL"
 }
 YO_NAMESPACES="easy-ui5 @sap-ux/adp @sap/adaptation-project @sap/add-hdb-module @sap/aicore @sap/base-mta-module @sap/cap-project @sap/fiori"
 
@@ -586,7 +676,7 @@ $NODE_INSTALLS" ] || fail "workstation did not install nvm, Node.js LTS as defau
   : >"$NODE_TOOLS_LOG"
   out=$(run_tools "$home" workstation "$BASE_PATH") || fail "node-tools re-run failed: $out"
   out="$out$(run_bash_tools "$home" "$BASE_PATH")" || fail "bash-tools re-run failed: $out"
-  [ "$(calls)" = "$YO_SMOKE" ] || fail "a re-run reinstalled something or skipped the generator check: $(calls)"
+  [ "$(calls)" = "$QUIET_RERUN" ] || fail "a re-run reinstalled something or skipped the generator check: $(calls)"
   [ -z "$out" ] || fail "a re-run is not quiet: $out"
   pass "workstation: nvm (PROFILE=/dev/null), Node.js LTS as default, pnpm, the pnpm globals (allowBuilds first), the skills, the npm globals in nvm's prefix (yo lists every generator), cf-tools-local on amd64; then herdr, Pi, Copilot, Claude Code, and Antigravity; re-runs install and print nothing"
 }
@@ -601,7 +691,7 @@ test_only_missing_is_installed() {
   [ "$(calls)" = "pnpm add -g eslint @ui5/cli
 npx --yes skills add vercel-labs/skills --skill find-skills --agent universal --yes --global
 npm install -g --allow-scripts=mbt,mta mbt @sap/generator-aicore
-$YO_SMOKE" ] \
+$QUIET_RERUN" ] \
     || fail "node-tools did not install only the missing pnpm globals, skill, and npm globals: $(calls)"
   # mta and the other tools are untouched, and mta/yo from the first install still run.
   [ -f "$root/mbt/package.json" ] || fail "mbt was not reinstalled"
@@ -612,7 +702,7 @@ $YO_SMOKE" ] \
   out=$(run_tools "$home" workstation "$BASE_PATH") || fail "node-tools after deleting a mattpocock skill failed: $out"
   [ "$(calls)" = "npx --yes skills add mattpocock/skills --agent universal --yes --global
 npx --yes skills add https://github.com/mattpocock/skills/tree/153fc1b93de6584562765cdce299324e1ff9e661/skills/engineering/resolving-merge-conflicts --agent universal --yes --global
-$YO_SMOKE" ] \
+$QUIET_RERUN" ] \
     || fail "mattpocock/skills was not followed by the pinned skill: $(calls)"
   [ "$(cat "$home/.agents/skills/resolving-merge-conflicts/SKILL.md")" = pinned ] || fail "the pinned copy lost to mattpocock/skills'"
   pass "a re-switch installs only the missing pnpm and npm globals and skills, and the pinned resolving-merge-conflicts always follows mattpocock/skills"
@@ -633,7 +723,7 @@ test_container_and_failures() {
   [ ! -e "$home/.nvm" ] || fail "container installed nvm"
   : >"$NODE_TOOLS_LOG"
   out="$out$(PNPM_HOME="$home/pnpm-home" run_bash_tools "$home" "$FIX/image:$BASE_PATH")" || fail "container bash-tools failed: $out"
-  [ "$(calls)" = "$(bash_installs "$home")" ] || fail "container bash-tools did not only run the five installers: $(calls)"
+  [ "$(calls)" = "$(bash_installs "$home")" ] || fail "container bash-tools did not only run the six vendor installers (including treehouse): $(calls)"
   for tool in herdr pi copilot claude agy; do
     [ -x "$home/.local/bin/$tool" ] || fail "container did not install $tool into ~/.local/bin"
   done
@@ -641,7 +731,7 @@ test_container_and_failures() {
   : >"$NODE_TOOLS_LOG"
   out=$(PNPM_HOME="$home/pnpm-home" run_tools "$home" container "$FIX/image:$BASE_PATH")
   out="$out$(PNPM_HOME="$home/pnpm-home" run_bash_tools "$home" "$FIX/image:$BASE_PATH")"
-  [ "$(calls)" = "$YO_SMOKE" ] && [ -z "$out" ] || fail "a container re-run reinstalled tools, skipped the generator check, or warned: $(calls) $out"
+  [ "$(calls)" = "$QUIET_RERUN" ] && [ -z "$out" ] || fail "a container re-run reinstalled tools, skipped the generator check, or warned: $(calls) $out"
 
   # NPM_CONFIG_PREFIX wins over ~/.npm-global.
   home="$TMP_ROOT/ct-prefix"
@@ -651,7 +741,7 @@ test_container_and_failures() {
   [ -x "$home/custom/bin/yo" ] && [ ! -e "$home/.npm-global" ] || fail "container ignored NPM_CONFIG_PREFIX"
 
   # No pnpm: node-tools stops with clear warnings, nothing is installed,
-  # and bash-tools still installs all five.
+  # and bash-tools still runs all six vendor installers (including treehouse).
   home="$TMP_ROOT/ct-nopnpm"
   mkdir -p "$home"
   : >"$NODE_TOOLS_LOG"
@@ -662,7 +752,7 @@ test_container_and_failures() {
   assert_contains "$out" "deny list is unproven because the policy check did not run" "missing pnpm hid the unproven FAB policy: $out"
   [ -z "$(calls)" ] || fail "node-tools installed something without pnpm: $(calls)"
   out=$(run_bash_tools "$home" "$BASE_PATH") || fail "bash-tools without pnpm failed: $out"
-  [ "$(calls)" = "$(bash_installs "$home")" ] || fail "bash-tools without pnpm did not install the five CLIs: $(calls)"
+  [ "$(calls)" = "$(bash_installs "$home")" ] || fail "bash-tools without pnpm did not install the six vendor CLIs (including treehouse): $(calls)"
 
   if out=$(NVM_INSTALL_URL="file://$TMP_ROOT/missing.sh" run_tools "$TMP_ROOT/ws-offline" workstation "$BASE_PATH"); then
     fail "workstation without the nvm install script succeeded: $out"
@@ -741,7 +831,7 @@ test_smoke_checks_warn() {
   [ -x "$home/.npm-global/bin/yo" ] && [ -f "$home/.agents/skills/find-skills/SKILL.md" ] || fail "smoke warnings stopped the installs"
   : >"$NODE_TOOLS_LOG"
   out=$(PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") || fail "a re-run after smoke warnings failed: $out"
-  [ "$(calls)" = "$YO_SMOKE" ] && [ -z "$out" ] || fail "a re-run after smoke warnings skipped the generator check or was not quiet: $(calls) $out"
+  [ "$(calls)" = "$QUIET_RERUN" ] && [ -z "$out" ] || fail "a re-run after smoke warnings skipped the generator check or was not quiet: $(calls) $out"
   if out=$(YO_FAKE_HIDE=@sap/fiori PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH"); then
     fail "an existing but undiscoverable generator was accepted: $out"
   fi
@@ -765,6 +855,220 @@ test_smoke_checks_warn() {
   fi
   assert_contains "$out" "warning: yo --generators does not list @sap/cap-project" "an npm failure suppressed an existing generator's smoke check: $out"
   pass "smoke checks warn on every switch, including existing globals, failed installs, and a missing cf CLI"
+}
+
+# Installs the fake AXI tool $2 at version $3 into bin directory $1, as an
+# earlier install (the devcontainer image's, or Firstmate's bootstrap) would.
+fake_axi_tool() {
+  mkdir -p "$1"
+  sed "s/@VERSION@/$3/" "$FIX/fake-axi" >"$1/$2"
+  chmod +x "$1/$2"
+}
+
+test_axi_tools() {
+  local home="$TMP_ROOT/axi" out bin tool version
+  mkdir -p "$home"
+  bin="$home/.npm-global/bin"
+
+  # The devcontainer image or Firstmate's bootstrap already put the tools in
+  # ~/.npm-global: at their floors or above them,
+  # a switch installs nothing, leaves no second copy, and only repairs hooks.
+  fake_axi_tool "$bin" gh-axi 0.1.29
+  fake_axi_tool "$bin" chrome-devtools-axi 0.1.23
+  fake_axi_tool "$bin" lavish-axi 0.1.80
+  fake_axi_tool "$bin" tasks-axi 0.2.6
+  fake_axi_tool "$bin" quota-axi 1.0.0
+  PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH" >/dev/null || fail "setup for the AXI floors failed"
+  : >"$NODE_TOOLS_LOG"
+  out=$(PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") || fail "a switch with the AXI tools at their floors failed: $out"
+  [ "$(calls)" = "$QUIET_RERUN" ] && [ -z "$out" ] || fail "tools at their floors were reinstalled or the switch was noisy: $(calls) $out"
+  [ "$("$bin/gh-axi" --version)" = "gh-axi 0.1.29" ] || fail "an AXI tool at its floor was replaced"
+  [ ! -e "$home/pnpm/bin/gh-axi" ] && [ ! -e "$home/.local/bin/gh-axi" ] || fail "an AXI tool was duplicated outside npm's global bin"
+  [ "$("$bin/chrome-devtools-axi" --version)" = "chrome-devtools-axi 0.1.23" ] || fail "a setup-compatible Chrome CLI was replaced"
+
+  for version in 0.1.0 0.1.22; do
+    fake_axi_tool "$bin" chrome-devtools-axi "$version"
+    rm "$home/.config/opencode/plugins/axi-chrome-devtools-axi.js"
+    : >"$NODE_TOOLS_LOG"
+    out=$(PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") \
+      || fail "a legacy Chrome CLI was not upgraded before hook setup: $out"
+    [ "$(calls)" = "npm install -g chrome-devtools-axi@latest
+$QUIET_RERUN" ] || fail "a legacy Chrome CLI was not the only tool upgraded: $(calls)"
+    [ "$("$bin/chrome-devtools-axi" --version)" = "chrome-devtools-axi 9.9.9" ] || fail "Chrome stayed at its legacy version"
+    [ -f "$home/.config/opencode/plugins/axi-chrome-devtools-axi.js" ] || fail "upgrading Chrome did not install its hook"
+    : >"$NODE_TOOLS_LOG"
+    out=$(PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") || fail "a switch after upgrading Chrome failed: $out"
+    [ "$(calls)" = "$QUIET_RERUN" ] && [ -z "$out" ] || fail "upgrading Chrome did not converge to a quiet re-switch: $(calls) $out"
+  done
+
+  # One patch below a floor, a version that cannot be read, and a missing tool
+  # install @latest, each alone, from npm; a newer tool next to them is left.
+  fake_axi_tool "$bin" gh-axi 0.1.28
+  fake_axi_tool "$bin" lavish-axi 0.1.9
+  fake_axi_tool "$bin" tasks-axi 0.2.5
+  printf '#!/bin/sh\necho dev-build\n' >"$bin/quota-axi"
+  rm "$bin/chrome-devtools-axi"
+  : >"$NODE_TOOLS_LOG"
+  out=$(NPM_FAKE_AXI_VERSION=2.0.0 PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") \
+    || fail "a switch that upgrades AXI tools failed: $out"
+  [ "$(calls)" = "$AXI_ADD
+$QUIET_RERUN" ] || fail "tools below a floor were not all reinstalled, in one npm call: $(calls)"
+  [ "$out" = "node-tools: ${AXI_ADD#npm install -g }" ] || [ "$out" = "node-tools: $AXI_ADD" ] || fail "reinstalling AXI tools printed more than the npm line: $out"
+  for tool in gh-axi chrome-devtools-axi lavish-axi tasks-axi quota-axi; do
+    [ "$("$bin/$tool" --version)" = "$tool 2.0.0" ] || fail "$tool was not reinstalled at the registry's latest"
+  done
+  fake_axi_tool "$bin" gh-axi 3.0.0
+  fake_axi_tool "$bin" quota-axi 0.1.50
+  : >"$NODE_TOOLS_LOG"
+  out=$(PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") || fail "a single stale AXI tool failed the switch: $out"
+  [ "$(calls)" = "npm install -g quota-axi@latest
+$QUIET_RERUN" ] || fail "only the tool below its floor was not reinstalled: $(calls)"
+  [ "$("$bin/gh-axi" --version)" = "gh-axi 3.0.0" ] || fail "a newer AXI tool was replaced"
+
+  # A registry whose latest is still below the floor is reported, not looped on.
+  fake_axi_tool "$bin" tasks-axi 0.2.5
+  if out=$(NPM_FAKE_AXI_VERSION=0.2.5 PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH"); then
+    fail "an AXI tool still below its floor after npm install was accepted: $out"
+  fi
+  assert_contains "$out" "tasks-axi is still missing or below 0.2.6" "a floor miss after the install is not named: $out"
+  assert_contains "$out" "axi_tools did not complete" "a floor miss is not reported as a failed step: $out"
+
+  fake_axi_tool "$bin" tasks-axi 0.2.6
+  fake_axi_tool "$bin" chrome-devtools-axi 0.1.0
+  : >"$NODE_TOOLS_LOG"
+  if out=$(NPM_FAKE_AXI_VERSION=0.1.22 PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH"); then
+    fail "a Chrome CLI without setup hooks was accepted after npm install: $out"
+  fi
+  assert_contains "$out" "chrome-devtools-axi is still missing or below 0.1.23" "an incompatible Chrome install was not named: $out"
+  assert_contains "$out" "axi_tools" "an incompatible Chrome install was not a failed provisioning step: $out"
+  [ "$(calls)" = "npm install -g chrome-devtools-axi@latest
+$QUIET_RERUN" ] || fail "an incompatible Chrome install retried or blocked sibling operations: $(calls)"
+
+  # A failing npm install is reported and does not stop the other steps.
+  home="$TMP_ROOT/axi-fail"
+  mkdir -p "$home"
+  if out=$(NPM_FAKE_FAIL=1 PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH"); then
+    fail "a failing AXI install was accepted: $out"
+  fi
+  assert_contains "$out" "npm install -g gh-axi@latest" "a failed AXI install is not reported: $out"
+  assert_contains "$out" "gh-axi is not on PATH; cannot set up its agent hooks" "missing AXI tools did not stop the hooks step from reporting: $out"
+  [ -d "$home/pnpm/global/v11/h/node_modules/eslint" ] && [ -f "$home/.agents/skills/find-skills/SKILL.md" ] \
+    || fail "a failing AXI install stopped the pnpm globals or the skills"
+
+  # The workstation installs them into nvm's default Node.js, on PATH there.
+  home="$TMP_ROOT/axi-ws"
+  mkdir -p "$home"
+  run_tools "$home" workstation "$BASE_PATH" >/dev/null || fail "workstation setup for the AXI tools failed"
+  for tool in gh-axi chrome-devtools-axi lavish-axi tasks-axi quota-axi; do
+    [ "$("$home/.nvm/default/bin/$tool" --version)" = "$tool 9.9.9" ] || fail "workstation: $tool is not in nvm's default Node.js bin"
+  done
+  fake_axi_tool "$home/.nvm/default/bin" chrome-devtools-axi 0.1.0
+  rm "$home/.config/opencode/plugins/axi-chrome-devtools-axi.js"
+  : >"$NODE_TOOLS_LOG"
+  out=$(run_tools "$home" workstation "$BASE_PATH") || fail "workstation did not upgrade legacy Chrome before hook setup: $out"
+  [ "$(calls)" = "npm install -g chrome-devtools-axi@latest
+$QUIET_RERUN" ] || fail "workstation did not upgrade only legacy Chrome: $(calls)"
+  [ "$("$home/.nvm/default/bin/chrome-devtools-axi" --version)" = "chrome-devtools-axi 9.9.9" ] \
+    && [ -f "$home/.config/opencode/plugins/axi-chrome-devtools-axi.js" ] || fail "workstation did not upgrade Chrome and install its hook"
+  pass "AXI tools: installed at @latest into npm's global prefix when missing or below their floors, in one call; left alone at or above them (no second copy next to the image's or Firstmate's); a floor missed after the install is reported; a failing install does not stop the other steps; the workstation uses nvm's prefix"
+}
+
+test_axi_hooks() {
+  local home="$TMP_ROOT/hooks" out declared settings tool
+  declared='{"hooks": {"SessionStart": [{"command": "gh-axi"}, {"command": "chrome-devtools-axi"}, {"command": "lavish-axi"}]}, "theme": "dark-ansi"}'
+  settings="$home/.claude/settings.json"
+  mkdir -p "$home/dotfiles/home/.claude" "$home/.claude"
+  printf '%s\n' "$declared" >"$home/dotfiles/home/.claude/settings.json"
+  ln -s "$home/dotfiles/home/.claude/settings.json" "$settings"
+
+  # Claude Code's settings.json is a Home Manager link into the repo and
+  # already declares the hooks: the tools' own run leaves it alone, and the
+  # other agents' hooks (Codex, OpenCode) are written.
+  : >"$NODE_TOOLS_LOG"
+  out=$(PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") || fail "a switch with Claude's declared hooks failed: $out"
+  assert_not_contains "$out" "Home Manager declares it" "setup hooks changed Claude's declared settings and needed the restore: $out"
+  [ "$(calls)" = "$NODE_INSTALLS" ] || fail "the first switch did not install the tools and run each setup hooks once: $(calls)"
+  [ -L "$settings" ] && [ "$(cat "$home/dotfiles/home/.claude/settings.json")" = "$declared" ] \
+    || fail "setup hooks changed Home Manager's Claude settings"
+  for tool in gh-axi chrome-devtools-axi lavish-axi; do
+    [ -f "$home/.config/opencode/plugins/axi-$tool.js" ] || fail "$tool's OpenCode hook was not written"
+    assert_contains "$(cat "$home/.codex/hooks.json")" "$tool" "$tool's Codex hook was not written"
+  done
+
+  # A tool that rewrites the Claude hook anyway (the real one does when it is
+  # not run from PATH) is put back byte for byte, through the link.
+  out=$(AXI_FAKE_CLAUDE_REWRITE=1 PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") \
+    || fail "a switch that restored Claude's settings failed: $out"
+  assert_contains "$out" "kept $settings as Home Manager declares it" "a restored Claude settings.json was not mentioned: $out"
+  [ -L "$settings" ] && [ "$(cat "$home/dotfiles/home/.claude/settings.json")" = "$declared" ] \
+    || fail "a rewritten Claude settings.json was not restored through its link"
+
+  # Without a settings.json (a switch that runs before Home Manager links it),
+  # the file the tools create is removed, so the link can be made.
+  home="$TMP_ROOT/hooks-fresh"
+  mkdir -p "$home"
+  out=$(PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") || fail "a switch without Claude settings failed: $out"
+  assert_not_contains "$out" "settings.json" "the removal of the file that setup hooks created was reported: $out"
+  [ ! -e "$home/.claude/settings.json" ] || fail "setup hooks left a plain Claude settings.json for Home Manager to collide with"
+  [ -f "$home/.config/opencode/plugins/axi-lavish-axi.js" ] || fail "the other agents' hooks were not written without Claude settings"
+
+  # A failing setup hooks is reported, the others still run, and the Claude
+  # file is still put back.
+  home="$TMP_ROOT/hooks-fail"
+  mkdir -p "$home/.claude"
+  printf '%s\n' "$declared" >"$home/.claude/settings.json"
+  PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH" >/dev/null || fail "setup for failing hooks failed"
+  : >"$NODE_TOOLS_LOG"
+  if out=$(AXI_FAKE_HOOKS_FAIL=1 PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH"); then
+    fail "failing setup hooks were accepted: $out"
+  fi
+  assert_contains "$out" "gh-axi setup hooks failed" "a failing setup hooks is not named: $out"
+  assert_contains "$out" "lavish-axi setup hooks failed" "a failing setup hooks stopped the next tool's: $out"
+  assert_contains "$out" "axi_hooks did not complete" "failing setup hooks is not a failed step: $out"
+  [ "$(calls)" = "$QUIET_RERUN" ] || fail "failing setup hooks stopped the generator check or reinstalled tools: $(calls)"
+  pass "AXI hooks: setup hooks runs for gh-axi, chrome-devtools-axi, and lavish-axi on every switch; Claude Code's Home Manager settings.json (which declares them) is never changed or pre-empted; Codex and OpenCode hooks are written; a failing one is reported without stopping the rest"
+}
+
+test_treehouse() {
+  local home="$TMP_ROOT/treehouse" out
+  mkdir -p "$home"
+  : >"$NODE_TOOLS_LOG"
+  out=$(run_bash_tools "$home" "$BASE_PATH") || fail "bash-tools on a fresh HOME failed: $out"
+  assert_contains "$(calls)" "$TREEHOUSE_INSTALL" "treehouse was not installed: $(calls)"
+  [ "$("$home/.local/bin/treehouse" --version)" = "treehouse version 3.1.4" ] || fail "treehouse is not in ~/.local/bin"
+  assert_contains "$("$home/.local/bin/treehouse" get --help)" "--lease" "the fake treehouse lacks --lease"
+  : >"$NODE_TOOLS_LOG"
+  out=$(run_bash_tools "$home" "$BASE_PATH") || fail "bash-tools re-run failed: $out"
+  [ -z "$(calls)" ] && [ -z "$out" ] || fail "a treehouse with --lease was installed again or the re-run was noisy: $(calls) $out"
+
+  # A treehouse without `get --lease` is installed again, and only it.
+  home="$TMP_ROOT/treehouse-old"
+  mkdir -p "$home"
+  # Its installer leaves a treehouse without --lease, which bash-tools reports.
+  TREEHOUSE_FAKE_OLD=1 run_bash_tools "$home" "$BASE_PATH" >/dev/null && fail "bash-tools accepted an old treehouse"
+  [ "$("$home/.local/bin/treehouse" --version)" = "treehouse version 2.0.0" ] || fail "the old treehouse fixture is wrong"
+  : >"$NODE_TOOLS_LOG"
+  out=$(run_bash_tools "$home" "$BASE_PATH") || fail "bash-tools upgrading treehouse failed: $out"
+  [ "$(calls)" = "$TREEHOUSE_INSTALL" ] || fail "only the treehouse without --lease should have been installed again: $(calls)"
+  [ "$("$home/.local/bin/treehouse" --version)" = "treehouse version 3.1.4" ] || fail "treehouse was not upgraded"
+
+  # An installer that leaves a treehouse without --lease is reported; a failing
+  # one is reported without stopping the other installers.
+  home="$TMP_ROOT/treehouse-stale"
+  mkdir -p "$home"
+  if out=$(TREEHOUSE_FAKE_OLD=1 run_bash_tools "$home" "$BASE_PATH"); then
+    fail "a treehouse installer that leaves no --lease support was accepted"
+  fi
+  assert_contains "$out" "does not support 'treehouse get --lease'" "a treehouse without --lease is not reported: $out"
+  home="$TMP_ROOT/treehouse-fail"
+  mkdir -p "$home"
+  if out=$(TREEHOUSE_FAKE_FAIL=1 run_bash_tools "$home" "$BASE_PATH"); then
+    fail "a failing treehouse installer was accepted: $out"
+  fi
+  assert_contains "$out" "cannot install treehouse" "a failed treehouse install is not reported: $out"
+  assert_contains "$out" "failed: treehouse" "the failed step is not named: $out"
+  [ -x "$home/.local/bin/claude" ] && [ -x "$home/.local/bin/agy" ] || fail "a failing treehouse installer stopped the others"
+  pass "treehouse: installed to ~/.local/bin (on its installer's PATH, so no sudo); a copy with --lease is left alone and one without it is installed again; failures are reported without stopping the others"
 }
 
 test_arc1_policy_check() {
@@ -924,7 +1228,7 @@ test_skill_pin_retries() {
       [ "$(cat "$home/.agents/skills/resolving-merge-conflicts/SKILL.md")" = pinned ] || fail "a retry retained the unpinned skill"
       : >"$NODE_TOOLS_LOG"
       out=$(XDG_STATE_HOME=$([ "$state" = default ] || echo "$home/state") PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") || fail "a converged pin was not idempotent: $out"
-      [ "$(calls)" = "$YO_SMOKE" ] && [ -z "$out" ] || fail "a converged pin was reinstalled: $(calls) $out"
+      [ "$(calls)" = "$QUIET_RERUN" ] && [ -z "$out" ] || fail "a converged pin was reinstalled: $(calls) $out"
     done
   done
 
@@ -1093,7 +1397,8 @@ $PI_REMOVE
 $COPILOT_INSTALL
 $COPILOT_REMOVE
 $CLAUDE_INSTALL
-$(agy_install_line "$home")" ] || fail "migration did not remove pnpm's Pi and Copilot each right after its installer: $(calls)"
+$(agy_install_line "$home")
+$TREEHOUSE_INSTALL" ] || fail "migration did not remove pnpm's Pi and Copilot each right after its installer: $(calls)"
   for tool in pi copilot; do
     [ ! -e "$pnpm_bin/$tool" ] || fail "migration left pnpm's $tool"
     [ "$("$home/.local/bin/$tool" --version)" = "$tool-fake" ] || fail "$tool does not run from ~/.local/bin after migration"
@@ -1155,7 +1460,8 @@ test_real_herdr_installer() {
   [ "$(calls)" = "$PI_INSTALL
 $COPILOT_INSTALL
 $CLAUDE_INSTALL
-$(agy_install_line "$home")" ] || fail "the real herdr install ran fakes other than the Pi, Copilot, Claude Code, and Antigravity installers: $(calls)"
+$(agy_install_line "$home")
+$TREEHOUSE_INSTALL" ] || fail "the real herdr install ran fakes other than the Pi, Copilot, Claude Code, Antigravity, and treehouse installers: $(calls)"
   [ "$(HOME=$home "$home/.local/bin/herdr" --version </dev/null)" = "herdr $latest" ] \
     || fail "$home/.local/bin/herdr is not herdr's latest release $latest"
   [ "$(HOME=$home HERDR_CONFIG_PATH="$ROOT/home/.config/herdr/config.toml" "$home/.local/bin/herdr" config check </dev/null)" = "config: ok" ] \
@@ -1375,6 +1681,9 @@ test_only_missing_is_installed
 test_container_and_failures
 test_step_failures_do_not_block
 test_smoke_checks_warn
+test_axi_tools
+test_axi_hooks
+test_treehouse
 test_arc1_policy_check
 test_pnpm_policy
 test_skill_pin_retries
