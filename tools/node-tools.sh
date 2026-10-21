@@ -39,9 +39,13 @@
 # - agent skills for every agent (`npx --yes skills add ... --agent universal
 #   --yes --global`, which fills ~/.agents/skills): arc-mcp/arc-1,
 #   mattpocock/skills, vercel-labs/skills (find-skills only), and the
-#   mattpocock resolving-merge-conflicts skill at a pinned commit. --agent universal is required
-#   (--yes alone targets 50+ agent config directories), and the CLI reads
-#   owner/repo@X as a skill name, so there is no @latest.
+#   mattpocock resolving-merge-conflicts skill at a pinned commit, and the
+#   no-mistakes skill at the release tag of the installed no-mistakes CLI
+#   (byte-identical to what `no-mistakes init` writes for that release), again
+#   whenever that version changes.
+#   --agent universal is required (--yes alone targets 50+ agent config
+#   directories), and the CLI reads owner/repo@X as a skill name, so there is
+#   no @latest.
 #
 # npm's global prefix: on the container $NPM_CONFIG_PREFIX, which the image
 # sets to ~/.npm-global (home.nix and this script default to it too; its bin
@@ -80,6 +84,10 @@ NPM_PACKAGES=(mbt mta yo generator-easy-ui5 @sap-ux/generator-adp @sap/generator
 YO_NAMESPACES=(easy-ui5 @sap-ux/adp @sap/adaptation-project @sap/add-hdb-module @sap/aicore
   @sap/base-mta-module @sap/cap-project @sap/fiori)
 MATTPOCOCK_RESOLVING_MERGE_CONFLICTS=https://github.com/mattpocock/skills/tree/153fc1b93de6584562765cdce299324e1ff9e661/skills/engineering/resolving-merge-conflicts
+# The no-mistakes skill ships in the CLI's own repository, one tag per release;
+# ensure_no_mistakes_skill installs the tag of the installed CLI and records it here.
+NO_MISTAKES_SKILL_REPO=https://github.com/kunchenguid/no-mistakes
+NO_MISTAKES_SKILL_MARKER=${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/no-mistakes-skill-version
 SKILLS_DIR=$HOME/.agents/skills
 # tool:minimum version.
 AXI_TOOLS=(gh-axi:0.1.29 chrome-devtools-axi:0.1.23 lavish-axi:0.1.80 tasks-axi:0.2.6 quota-axi:0.1.51)
@@ -388,6 +396,41 @@ try {
 JS
 }
 
+# The installed no-mistakes CLI's release tag (v1.84.0, v1.99.1-rc.1, ...), or
+# nothing when the CLI is absent or prints no such version. The CLI usually
+# lives at ~/.local/bin/no-mistakes (a link into its own ~/.no-mistakes/bin).
+no_mistakes_version() {
+  local bin out
+  bin=$(command -v no-mistakes 2>/dev/null) || bin=
+  for bin in "$bin" "$HOME/.local/bin/no-mistakes" "$HOME/.no-mistakes/bin/no-mistakes"; do
+    [ -n "$bin" ] && [ -x "$bin" ] || continue
+    out=$("$bin" --version 2>/dev/null </dev/null) || continue
+    out=$(printf '%s\n' "$out" | grep -Eo 'v[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.+-]*' | head -n 1) || true
+    [ -z "$out" ] || { printf '%s\n' "$out"; return 0; }
+  done
+  return 0
+}
+
+# Keeps the no-mistakes skill at the release tag of the installed CLI: installs
+# it when SKILL.md is missing or the recorded version differs, and otherwise
+# does nothing. Without a CLI version it warns (without failing the run) and
+# leaves any existing skill untouched. The CLI itself is never touched.
+ensure_no_mistakes_skill() {
+  local version have=
+  version=$(no_mistakes_version)
+  if [ -z "$version" ]; then
+    printf 'node-tools: warning: no-mistakes is not on PATH or prints no version; leaving the no-mistakes skill as it is\n' >&2
+    return 0
+  fi
+  [ ! -f "$NO_MISTAKES_SKILL_MARKER" ] || have=$(cat "$NO_MISTAKES_SKILL_MARKER" 2>/dev/null) || have=
+  if [ -f "$SKILLS_DIR/no-mistakes/SKILL.md" ] && [ "$have" = "$version" ]; then return 0; fi
+  skills_add "$NO_MISTAKES_SKILL_REPO/tree/$version/skills/no-mistakes" || return 1
+  [ -f "$SKILLS_DIR/no-mistakes/SKILL.md" ] || oops "$SKILLS_DIR/no-mistakes/SKILL.md is missing after the skills install" || return 1
+  mkdir -p "$(dirname "$NO_MISTAKES_SKILL_MARKER")" \
+    && printf '%s\n' "$version" >"$NO_MISTAKES_SKILL_MARKER" \
+    || oops "cannot record the no-mistakes skill version in $NO_MISTAKES_SKILL_MARKER" || return 1
+}
+
 ensure_skills() {
   command -v npx >/dev/null 2>&1 || oops "npx not found on PATH; cannot install the agent skills" || return 1
   [ -f "$SKILLS_DIR/explain-abap-code/SKILL.md" ] || skills_add arc-mcp/arc-1 || return 1
@@ -401,6 +444,7 @@ ensure_skills() {
     [ -f "$SKILLS_DIR/$skill/SKILL.md" ] || oops "$SKILLS_DIR/$skill/SKILL.md is missing after the skills install" || return 1
   done
   pinned_merge_conflicts_present || oops "resolving-merge-conflicts lock metadata does not identify the pinned source and revision" || return 1
+  ensure_no_mistakes_skill
 }
 
 # Keep every ARC-1 invocation inside the scrubbed scratch environment: arc-1

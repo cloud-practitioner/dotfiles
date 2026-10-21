@@ -382,6 +382,10 @@ case "$source" in
   vercel-labs/skills) [ "$skill" = find-skills ] || exit 1; add find-skills vercel ;;
   https://github.com/mattpocock/skills/tree/153fc1b93de6584562765cdce299324e1ff9e661/skills/engineering/resolving-merge-conflicts)
     add resolving-merge-conflicts pinned ;;
+  https://github.com/kunchenguid/no-mistakes/tree/*/skills/no-mistakes)
+    tag=${source#https://github.com/kunchenguid/no-mistakes/tree/}
+    mkdir -p "$HOME/.agents/skills/no-mistakes"
+    echo "no-mistakes ${tag%%/*}" >"$HOME/.agents/skills/no-mistakes/SKILL.md" ;;
   *) echo "fake skills: unexpected source $source" >&2; exit 1 ;;
 esac
 EOF
@@ -582,6 +586,14 @@ export TREEHOUSE_INSTALL_URL="file://$FIX/treehouse-install.sh"
 unset COPILOT_HOME
 mkdir -p "$FIX/common"
 cp "$FIX/cf" "$FIX/common/cf"
+# A fake no-mistakes CLI printing the real `--version` format; NO_MISTAKES_FAKE_VERSION
+# sets the tag (an empty one prints no parseable version).
+cat >"$FIX/common/no-mistakes" <<'EOF'
+#!/bin/sh
+[ "$1" = --version ] || { echo "fake no-mistakes: unexpected: $*" >&2; exit 1; }
+echo "no-mistakes version ${NO_MISTAKES_FAKE_VERSION-v1.84.0} (4822244) 2026-09-26T08:30:42Z"
+EOF
+chmod +x "$FIX/common/no-mistakes"
 BASE_PATH="$FIX/arc1:$FIX/common:/usr/bin:/bin"
 WINDOWS_NPM="/mnt/c/Users/dev/AppData/Roaming/npm"
 
@@ -605,10 +617,15 @@ agy_install_line() {
 
 # What the scripts install, in order.
 PNPM_ADD="pnpm add -g arc-1@latest npm-run-all eslint npm-check-updates @ui5/cli @sap/cds-dk @sap/cf-tools @sap/ux-ui5-tooling @sap/html5-app-deployer odata-openapi @wdio/cli"
+NO_MISTAKES_SKILL_SOURCE=https://github.com/kunchenguid/no-mistakes/tree/v1.84.0/skills/no-mistakes
+nm_skill_add() {
+  echo "npx --yes skills add https://github.com/kunchenguid/no-mistakes/tree/$1/skills/no-mistakes --agent universal --yes --global"
+}
 SKILLS_ADD="npx --yes skills add arc-mcp/arc-1 --agent universal --yes --global
 npx --yes skills add mattpocock/skills --agent universal --yes --global
 npx --yes skills add vercel-labs/skills --skill find-skills --agent universal --yes --global
-npx --yes skills add https://github.com/mattpocock/skills/tree/153fc1b93de6584562765cdce299324e1ff9e661/skills/engineering/resolving-merge-conflicts --agent universal --yes --global"
+npx --yes skills add https://github.com/mattpocock/skills/tree/153fc1b93de6584562765cdce299324e1ff9e661/skills/engineering/resolving-merge-conflicts --agent universal --yes --global
+npx --yes skills add https://github.com/kunchenguid/no-mistakes/tree/v1.84.0/skills/no-mistakes --agent universal --yes --global"
 NPM_ADD="npm install -g --allow-scripts=mbt,mta mbt mta yo generator-easy-ui5 @sap-ux/generator-adp @sap/generator-adaptation-project @sap/generator-add-hdb-module @sap/generator-aicore @sap/generator-base-mta-module @sap/generator-cap-project @sap/generator-fiori"
 CF_LOCAL_ADD="npm install -g --allow-scripts=@sap/cf-tools-local @sap/cf-tools-local"
 YO_SMOKE="yo --generators --no-insight"
@@ -661,6 +678,7 @@ $NODE_INSTALLS" ] || fail "workstation did not install nvm, Node.js LTS as defau
   "$NODE_TOOLS_POLICY_CHECK" "$home/.local/share/pnpm/global/pnpm-workspace.yaml" || fail "pnpm's global build policy is wrong"
   [ "$(cat "$home/.agents/skills/resolving-merge-conflicts/SKILL.md")" = pinned ] || fail "resolving-merge-conflicts is not the pinned copy"
   [ -f "$home/.agents/skills/find-skills/SKILL.md" ] || fail "find-skills is missing"
+  [ "$(cat "$home/.agents/skills/no-mistakes/SKILL.md")" = "no-mistakes v1.84.0" ] || fail "workstation: the no-mistakes skill of the installed CLI version is missing"
 
   : >"$NODE_TOOLS_LOG"
   out=$(run_bash_tools "$home" "$BASE_PATH") || fail "bash-tools on a fresh workstation HOME failed: $out"
@@ -682,7 +700,7 @@ $NODE_INSTALLS" ] || fail "workstation did not install nvm, Node.js LTS as defau
 }
 
 test_only_missing_is_installed() {
-  local home="$TMP_ROOT/ws" out root
+  local home="$TMP_ROOT/ws" out root status
   root="$home/.nvm/versions/node/$FAKE_NODE/lib/node_modules"
   rm -rf "$home/.local/share/pnpm/global/v11/h/node_modules/eslint" "$home/.local/share/pnpm/global/v11/h/node_modules/@ui5" \
     "$root/mbt" "$root/@sap/generator-aicore" "$home/.agents/skills/find-skills"
@@ -706,6 +724,40 @@ $QUIET_RERUN" ] \
     || fail "mattpocock/skills was not followed by the pinned skill: $(calls)"
   [ "$(cat "$home/.agents/skills/resolving-merge-conflicts/SKILL.md")" = pinned ] || fail "the pinned copy lost to mattpocock/skills'"
   pass "a re-switch installs only the missing pnpm and npm globals and skills, and the pinned resolving-merge-conflicts always follows mattpocock/skills"
+
+  # The no-mistakes skill follows the installed CLI's version: left alone while
+  # the recorded version matches, restored when missing, and installed again
+  # (also for a pre-release) when the CLI version changes.
+  : >"$NODE_TOOLS_LOG"
+  out=$(run_tools "$home" workstation "$BASE_PATH") || fail "node-tools with the no-mistakes skill current failed: $out"
+  [ "$(calls)" = "$QUIET_RERUN" ] || fail "a current no-mistakes skill was installed again: $(calls)"
+  [ -z "$out" ] || fail "a current no-mistakes skill made a re-run noisy: $out"
+  rm -rf "$home/.agents/skills/no-mistakes"
+  : >"$NODE_TOOLS_LOG"
+  out=$(run_tools "$home" workstation "$BASE_PATH") || fail "node-tools after deleting the no-mistakes skill failed: $out"
+  [ "$(calls)" = "$(nm_skill_add v1.84.0)
+$QUIET_RERUN" ] || fail "the no-mistakes skill was not restored by itself: $(calls)"
+  : >"$NODE_TOOLS_LOG"
+  out=$(NO_MISTAKES_FAKE_VERSION=v1.99.1-rc.1 run_tools "$home" workstation "$BASE_PATH") || fail "node-tools after a no-mistakes update failed: $out"
+  [ "$(calls)" = "$(nm_skill_add v1.99.1-rc.1)
+$QUIET_RERUN" ] || fail "a new no-mistakes version did not install its skill tag: $(calls)"
+  [ "$(cat "$home/.agents/skills/no-mistakes/SKILL.md")" = "no-mistakes v1.99.1-rc.1" ] || fail "the no-mistakes skill did not follow the CLI version"
+  : >"$NODE_TOOLS_LOG"
+  out=$(NO_MISTAKES_FAKE_VERSION=v1.99.1-rc.1 run_tools "$home" workstation "$BASE_PATH") || fail "node-tools with the updated skill current failed: $out"
+  [ "$(calls)" = "$QUIET_RERUN" ] || fail "an up-to-date no-mistakes skill was installed again: $(calls)"
+  # A CLI that is absent or prints no version warns, never fails, and leaves the skill.
+  : >"$NODE_TOOLS_LOG"
+  out=$(NO_MISTAKES_FAKE_VERSION='' run_tools "$home" workstation "$BASE_PATH") || fail "an unparseable no-mistakes version failed the run: $out"
+  assert_contains "$out" "warning: no-mistakes is not on PATH or prints no version" "an unparseable no-mistakes version is not warned about: $out"
+  [ "$(calls)" = "$QUIET_RERUN" ] || fail "an unparseable no-mistakes version installed a skill: $(calls)"
+  [ "$(cat "$home/.agents/skills/no-mistakes/SKILL.md")" = "no-mistakes v1.99.1-rc.1" ] || fail "an unparseable no-mistakes version touched the skill"
+  mv "$FIX/common/no-mistakes" "$FIX/no-mistakes.away"
+  out=$(run_tools "$home" workstation "$BASE_PATH"); status=$?
+  mv "$FIX/no-mistakes.away" "$FIX/common/no-mistakes"
+  [ "$status" = 0 ] || fail "a missing no-mistakes failed the run: $out"
+  assert_contains "$out" "warning: no-mistakes is not on PATH" "a missing no-mistakes is not warned about: $out"
+  [ "$(cat "$home/.agents/skills/no-mistakes/SKILL.md")" = "no-mistakes v1.99.1-rc.1" ] || fail "a missing no-mistakes touched the skill"
+  pass "the no-mistakes skill follows the installed CLI version (pre-releases too): restored when missing, installed again on a version change, left alone when current, and a missing or unparseable CLI only warns"
 }
 
 test_container_and_failures() {
@@ -715,6 +767,7 @@ test_container_and_failures() {
   out=$(PNPM_HOME="$home/pnpm-home" run_tools "$home" container "$FIX/image:$BASE_PATH") \
     || fail "container with the image's Node.js tools failed: $out"
   [ "$(calls)" = "$NODE_INSTALLS" ] || fail "container did not run only the pnpm, skills, and npm installs: $(calls)"
+  [ "$(cat "$home/.agents/skills/no-mistakes/SKILL.md")" = "no-mistakes v1.84.0" ] || fail "container: the no-mistakes skill of the installed CLI version is missing"
   # npm's global prefix is ~/.npm-global, where yo finds the generators.
   for ns in $YO_NAMESPACES; do
     assert_contains "$("$home/.npm-global/bin/yo" --generators)" "$ns" "yo does not list $ns from ~/.npm-global"
@@ -813,6 +866,13 @@ test_step_failures_do_not_block() {
     fail "a skills install that left skills out was accepted: $out"
   fi
   assert_contains "$out" "find-skills/SKILL.md is missing" "a missing skill is not reported: $out"
+  # A failing no-mistakes skill install is reported and fails the run.
+  home="$TMP_ROOT/fail-nm-skill"
+  mkdir -p "$home"
+  if out=$(NPX_FAKE_FAIL_SOURCE=$NO_MISTAKES_SKILL_SOURCE PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH"); then
+    fail "a failing no-mistakes skill install was accepted: $out"
+  fi
+  assert_contains "$out" "npx skills add $NO_MISTAKES_SKILL_SOURCE failed" "a failed no-mistakes skill install is not reported: $out"
   pass "a failing pnpm, npm, or skills step is reported and fails the run without stopping the others; a missing find-skills or resolving-merge-conflicts skill is caught"
 }
 
