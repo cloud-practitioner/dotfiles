@@ -150,6 +150,7 @@ What you get on Linux:
 
 - Nix user packages: ripgrep, fd, fzf, jq, bun, lazygit, Neovim, Hack Nerd Font.
 - WezTerm from nixpkgs, the Linux equivalent of its macOS cask.
+- AWS CLI v2 (`awscli2`) from nixpkgs in both Linux profiles. Only the CLI is installed: no `~/.aws` files, profiles, SSO setup, or credentials - configure those yourself (`aws configure sso`). Check with `aws --version`.
 - Shared toolchain installation in both Linux profiles - see [Upstream CLI tools](#upstream-cli-tools).
 - The same symlinked shell (zsh + starship), Neovim, WezTerm, and agent configs as macOS.
 - Git identity by remote URL and SSH client config, both rendered from your own `~/.config/dotfiles/identity.env`, and an `ssh-agent` systemd user service on the workstation profile - see [Git identity](#git-identity) and [SSH](#ssh-workstation-profile).
@@ -232,7 +233,7 @@ Apply changes the same way in each environment:
 - **WSL2 workstation**: pull and re-run `rebuild.sh`, as [Linux](#linux) shows.
 - **Devcontainer**: `hm-update`, as [Devcontainers](#devcontainers) shows.
 
-To check without applying, `bash tests/upstream-tools.test.sh` checks that neither profile installs Nix-built copies of the agent CLIs, and `bash tests/node-tools.test.sh` checks both install scripts (including the AXI tools, their hooks, and treehouse) against local fakes, and herdr's against its real installer. The latter requires Node.js and pnpm on `PATH` for semantic checks of generated pnpm configuration, plus GNU `timeout` for the policy-check fixtures.
+To check without applying, `bash tests/upstream-tools.test.sh` checks that neither profile installs Nix-built copies of the agent CLIs, `bash tests/aws-cli.test.sh` checks that both ship AWS CLI v2 and manage no AWS configuration, and `bash tests/node-tools.test.sh` checks both install scripts (including the AXI tools, their hooks, and treehouse) against local fakes, and herdr's against its real installer. The latter requires Node.js and pnpm on `PATH` for semantic checks of generated pnpm configuration, plus GNU `timeout` for the policy-check fixtures.
 
 ### Git identity
 
