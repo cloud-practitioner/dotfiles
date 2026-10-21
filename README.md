@@ -233,7 +233,7 @@ Apply changes the same way in each environment:
 - **WSL2 workstation**: pull and re-run `rebuild.sh`, as [Linux](#linux) shows.
 - **Devcontainer**: `hm-update`, as [Devcontainers](#devcontainers) shows.
 
-To check without applying, `bash tests/upstream-tools.test.sh` checks that neither profile installs Nix-built copies of the agent CLIs, `bash tests/aws-cli.test.sh` checks that both ship AWS CLI v2 and manage no AWS configuration, and `bash tests/node-tools.test.sh` checks both install scripts (including the AXI tools, their hooks, and treehouse) against local fakes, and herdr's against its real installer. The latter requires Node.js and pnpm on `PATH` for semantic checks of generated pnpm configuration, plus GNU `timeout` for the policy-check fixtures.
+To check without applying, `bash tests/upstream-tools.test.sh` checks that neither profile installs Nix-built copies of the agent CLIs, `bash tests/aws-cli.test.sh` checks that both ship AWS CLI v2, and `bash tests/node-tools.test.sh` checks both install scripts (including the AXI tools, their hooks, and treehouse) against local fakes, and herdr's against its real installer. The latter requires Node.js and pnpm on `PATH` for semantic checks of generated pnpm configuration, plus GNU `timeout` for the policy-check fixtures.
 
 ### Git identity
 
