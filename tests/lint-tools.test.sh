@@ -10,9 +10,10 @@
 #   home-path, which is what lands on PATH for interactive and non-interactive
 #   shells alike;
 # - both built activation scripts run tools/node-tools.sh, whose agent skills
-#   step installs the no-mistakes skill into ~/.agents/skills at the pinned
-#   release tag (tests/node-tools.test.sh runs that step against fakes: install,
-#   idempotence, and failure reporting).
+#   step installs the no-mistakes skill into ~/.agents/skills at the release
+#   tag of the installed no-mistakes CLI (tests/node-tools.test.sh runs that
+#   step against fakes: install, version-following refresh, idempotence, and
+#   failure reporting).
 #
 # Nix evaluates the flake from Git, so new files must be tracked (`git add`).
 set -u
@@ -61,8 +62,9 @@ test_profiles_install_lint_tools() {
 
 test_built_profiles_ship_lint_tools_and_skill_step() {
   local profile out tool
-  grep -q 'kunchenguid/no-mistakes/tree/v[0-9][0-9.]*/skills/no-mistakes' "$ROOT/tools/node-tools.sh" \
-    || fail "tools/node-tools.sh does not install the no-mistakes skill from a release tag"
+  # shellcheck disable=SC2016 # a literal $version in the script, not an expansion
+  grep -q 'NO_MISTAKES_SKILL_REPO/tree/\$version/skills/no-mistakes' "$ROOT/tools/node-tools.sh" \
+    || fail "tools/node-tools.sh does not install the no-mistakes skill from the installed CLI's release tag"
   for profile in $PROFILE_NAMES; do
     out=$(nix build --no-link --print-out-paths "$ROOT#homeConfigurations.\"$profile\".activationPackage" 2>/dev/null) \
       || fail "$profile: activation package does not build"
@@ -72,7 +74,7 @@ test_built_profiles_ship_lint_tools_and_skill_step() {
     done
     grep -q 'node-tools.sh' "$out/activate" || fail "$profile: the activation script does not run node-tools.sh"
   done
-  pass "built workstation and container profiles ship runnable shellcheck and actionlint and run the node-tools step that installs the no-mistakes skill"
+  pass "built workstation and container profiles ship runnable shellcheck and actionlint and run the node-tools step that installs the no-mistakes skill of the CLI's version"
 }
 
 if have_linux_nix; then
