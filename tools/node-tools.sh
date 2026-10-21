@@ -39,9 +39,12 @@
 # - agent skills for every agent (`npx --yes skills add ... --agent universal
 #   --yes --global`, which fills ~/.agents/skills): arc-mcp/arc-1,
 #   mattpocock/skills, vercel-labs/skills (find-skills only), and the
-#   mattpocock resolving-merge-conflicts skill at a pinned commit. --agent universal is required
-#   (--yes alone targets 50+ agent config directories), and the CLI reads
-#   owner/repo@X as a skill name, so there is no @latest.
+#   mattpocock resolving-merge-conflicts skill at a pinned commit, and the
+#   no-mistakes skill at the release tag of the no-mistakes CLI it documents
+#   (byte-identical to what `no-mistakes init` writes for that release).
+#   --agent universal is required (--yes alone targets 50+ agent config
+#   directories), and the CLI reads owner/repo@X as a skill name, so there is
+#   no @latest.
 #
 # npm's global prefix: on the container $NPM_CONFIG_PREFIX, which the image
 # sets to ~/.npm-global (home.nix and this script default to it too; its bin
@@ -80,6 +83,9 @@ NPM_PACKAGES=(mbt mta yo generator-easy-ui5 @sap-ux/generator-adp @sap/generator
 YO_NAMESPACES=(easy-ui5 @sap-ux/adp @sap/adaptation-project @sap/add-hdb-module @sap/aicore
   @sap/base-mta-module @sap/cap-project @sap/fiori)
 MATTPOCOCK_RESOLVING_MERGE_CONFLICTS=https://github.com/mattpocock/skills/tree/153fc1b93de6584562765cdce299324e1ff9e661/skills/engineering/resolving-merge-conflicts
+# The no-mistakes skill ships in the CLI's own repository, one tag per release.
+# Bump the tag with the no-mistakes version the devcontainer or workstation runs.
+NO_MISTAKES_SKILL=https://github.com/kunchenguid/no-mistakes/tree/v1.84.0/skills/no-mistakes
 SKILLS_DIR=$HOME/.agents/skills
 # tool:minimum version.
 AXI_TOOLS=(gh-axi:0.1.29 chrome-devtools-axi:0.1.23 lavish-axi:0.1.80 tasks-axi:0.2.6 quota-axi:0.1.51)
@@ -396,8 +402,10 @@ ensure_skills() {
   fi
   [ -f "$SKILLS_DIR/find-skills/SKILL.md" ] || skills_add vercel-labs/skills --skill find-skills || return 1
   pinned_merge_conflicts_present || skills_add "$MATTPOCOCK_RESOLVING_MERGE_CONFLICTS" || return 1
+  # Presence only, so a copy `no-mistakes init` refreshed for a newer CLI stays.
+  [ -f "$SKILLS_DIR/no-mistakes/SKILL.md" ] || skills_add "$NO_MISTAKES_SKILL" || return 1
   local skill
-  for skill in find-skills resolving-merge-conflicts; do
+  for skill in find-skills resolving-merge-conflicts no-mistakes; do
     [ -f "$SKILLS_DIR/$skill/SKILL.md" ] || oops "$SKILLS_DIR/$skill/SKILL.md is missing after the skills install" || return 1
   done
   pinned_merge_conflicts_present || oops "resolving-merge-conflicts lock metadata does not identify the pinned source and revision" || return 1

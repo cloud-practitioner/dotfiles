@@ -382,6 +382,9 @@ case "$source" in
   vercel-labs/skills) [ "$skill" = find-skills ] || exit 1; add find-skills vercel ;;
   https://github.com/mattpocock/skills/tree/153fc1b93de6584562765cdce299324e1ff9e661/skills/engineering/resolving-merge-conflicts)
     add resolving-merge-conflicts pinned ;;
+  https://github.com/kunchenguid/no-mistakes/tree/v1.84.0/skills/no-mistakes)
+    mkdir -p "$HOME/.agents/skills/no-mistakes"
+    echo no-mistakes >"$HOME/.agents/skills/no-mistakes/SKILL.md" ;;
   *) echo "fake skills: unexpected source $source" >&2; exit 1 ;;
 esac
 EOF
@@ -605,10 +608,12 @@ agy_install_line() {
 
 # What the scripts install, in order.
 PNPM_ADD="pnpm add -g arc-1@latest npm-run-all eslint npm-check-updates @ui5/cli @sap/cds-dk @sap/cf-tools @sap/ux-ui5-tooling @sap/html5-app-deployer odata-openapi @wdio/cli"
+NO_MISTAKES_SKILL_SOURCE=https://github.com/kunchenguid/no-mistakes/tree/v1.84.0/skills/no-mistakes
 SKILLS_ADD="npx --yes skills add arc-mcp/arc-1 --agent universal --yes --global
 npx --yes skills add mattpocock/skills --agent universal --yes --global
 npx --yes skills add vercel-labs/skills --skill find-skills --agent universal --yes --global
-npx --yes skills add https://github.com/mattpocock/skills/tree/153fc1b93de6584562765cdce299324e1ff9e661/skills/engineering/resolving-merge-conflicts --agent universal --yes --global"
+npx --yes skills add https://github.com/mattpocock/skills/tree/153fc1b93de6584562765cdce299324e1ff9e661/skills/engineering/resolving-merge-conflicts --agent universal --yes --global
+npx --yes skills add https://github.com/kunchenguid/no-mistakes/tree/v1.84.0/skills/no-mistakes --agent universal --yes --global"
 NPM_ADD="npm install -g --allow-scripts=mbt,mta mbt mta yo generator-easy-ui5 @sap-ux/generator-adp @sap/generator-adaptation-project @sap/generator-add-hdb-module @sap/generator-aicore @sap/generator-base-mta-module @sap/generator-cap-project @sap/generator-fiori"
 CF_LOCAL_ADD="npm install -g --allow-scripts=@sap/cf-tools-local @sap/cf-tools-local"
 YO_SMOKE="yo --generators --no-insight"
@@ -661,6 +666,7 @@ $NODE_INSTALLS" ] || fail "workstation did not install nvm, Node.js LTS as defau
   "$NODE_TOOLS_POLICY_CHECK" "$home/.local/share/pnpm/global/pnpm-workspace.yaml" || fail "pnpm's global build policy is wrong"
   [ "$(cat "$home/.agents/skills/resolving-merge-conflicts/SKILL.md")" = pinned ] || fail "resolving-merge-conflicts is not the pinned copy"
   [ -f "$home/.agents/skills/find-skills/SKILL.md" ] || fail "find-skills is missing"
+  [ "$(cat "$home/.agents/skills/no-mistakes/SKILL.md")" = no-mistakes ] || fail "workstation: the no-mistakes skill is missing"
 
   : >"$NODE_TOOLS_LOG"
   out=$(run_bash_tools "$home" "$BASE_PATH") || fail "bash-tools on a fresh workstation HOME failed: $out"
@@ -706,6 +712,20 @@ $QUIET_RERUN" ] \
     || fail "mattpocock/skills was not followed by the pinned skill: $(calls)"
   [ "$(cat "$home/.agents/skills/resolving-merge-conflicts/SKILL.md")" = pinned ] || fail "the pinned copy lost to mattpocock/skills'"
   pass "a re-switch installs only the missing pnpm and npm globals and skills, and the pinned resolving-merge-conflicts always follows mattpocock/skills"
+
+  # The no-mistakes skill is checked by presence only, so a copy that
+  # `no-mistakes init` refreshed is kept, and a deleted one is restored.
+  echo refreshed >"$home/.agents/skills/no-mistakes/SKILL.md"
+  : >"$NODE_TOOLS_LOG"
+  out=$(run_tools "$home" workstation "$BASE_PATH") || fail "node-tools with a refreshed no-mistakes skill failed: $out"
+  [ "$(calls)" = "$QUIET_RERUN" ] || fail "a present no-mistakes skill was installed again: $(calls)"
+  [ "$(cat "$home/.agents/skills/no-mistakes/SKILL.md")" = refreshed ] || fail "a present no-mistakes skill was overwritten"
+  rm -rf "$home/.agents/skills/no-mistakes"
+  : >"$NODE_TOOLS_LOG"
+  out=$(run_tools "$home" workstation "$BASE_PATH") || fail "node-tools after deleting the no-mistakes skill failed: $out"
+  [ "$(calls)" = "npx --yes skills add https://github.com/kunchenguid/no-mistakes/tree/v1.84.0/skills/no-mistakes --agent universal --yes --global
+$QUIET_RERUN" ] || fail "the no-mistakes skill was not restored by itself: $(calls)"
+  pass "the no-mistakes skill is restored when missing and left alone when present"
 }
 
 test_container_and_failures() {
@@ -715,6 +735,7 @@ test_container_and_failures() {
   out=$(PNPM_HOME="$home/pnpm-home" run_tools "$home" container "$FIX/image:$BASE_PATH") \
     || fail "container with the image's Node.js tools failed: $out"
   [ "$(calls)" = "$NODE_INSTALLS" ] || fail "container did not run only the pnpm, skills, and npm installs: $(calls)"
+  [ "$(cat "$home/.agents/skills/no-mistakes/SKILL.md")" = no-mistakes ] || fail "container: the no-mistakes skill is missing"
   # npm's global prefix is ~/.npm-global, where yo finds the generators.
   for ns in $YO_NAMESPACES; do
     assert_contains "$("$home/.npm-global/bin/yo" --generators)" "$ns" "yo does not list $ns from ~/.npm-global"
@@ -813,6 +834,13 @@ test_step_failures_do_not_block() {
     fail "a skills install that left skills out was accepted: $out"
   fi
   assert_contains "$out" "find-skills/SKILL.md is missing" "a missing skill is not reported: $out"
+  # A failing no-mistakes skill install is reported and fails the run.
+  home="$TMP_ROOT/fail-nm-skill"
+  mkdir -p "$home"
+  if out=$(NPX_FAKE_FAIL_SOURCE=$NO_MISTAKES_SKILL_SOURCE PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH"); then
+    fail "a failing no-mistakes skill install was accepted: $out"
+  fi
+  assert_contains "$out" "npx skills add $NO_MISTAKES_SKILL_SOURCE failed" "a failed no-mistakes skill install is not reported: $out"
   pass "a failing pnpm, npm, or skills step is reported and fails the run without stopping the others; a missing find-skills or resolving-merge-conflicts skill is caught"
 }
 
