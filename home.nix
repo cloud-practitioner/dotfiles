@@ -1,4 +1,4 @@
-{ config, pkgs, lib, user, profile ? "workstation", dotfilesRev ? "unknown", ghPackage ? null, ... }:
+{ config, pkgs, lib, user, profile ? "workstation", dotfilesRev ? "unknown", ... }:
 
 let
   dotfiles = "${config.home.homeDirectory}/.dotfiles";
@@ -81,14 +81,13 @@ in
     awscli2   # AWS CLI v2, install only
     shellcheck  # shell script linter
     actionlint  # GitHub Actions workflow linter
-    # magick and convert, for the PR evidence gate's images
+    # The PR evidence gate uses magick and convert to make images.
     imagemagick
   ] ++ lib.optionals (stdenv.isLinux && isWorkstation) [
-    # gh-axi (node-tools activation) wraps gh. Only the workstation gets one
-    # from Nix, from the newer pin in flake.nix (the PR evidence gate needs
-    # 2.99+). The devcontainer image installs gh from GitHub's apt repo, and
-    # a Nix gh in ~/.nix-profile/bin would hide that newer copy on PATH.
-    ghPackage
+    # gh-axi uses gh. The workstation installs gh from Nixpkgs.
+    # The devcontainer image installs gh from GitHub's apt repo.
+    # A Nix gh would hide the image's gh on PATH.
+    gh
     # Build/run devcontainers from the CLI; needs a Docker host.
     devcontainer
   ];
