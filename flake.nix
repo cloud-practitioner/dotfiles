@@ -4,6 +4,11 @@
   inputs = {
     # Use `github:NixOS/nixpkgs/nixpkgs-26.05-darwin` to use Nixpkgs 26.05.
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-26.05-darwin";
+    # A second pin of the same branch, used only for the workstation's gh. The
+    # main pin ships gh 2.96.0, and the PR evidence gate needs 2.99 or newer
+    # (`gh pr create --attach`). Refresh it alone with
+    # `nix flake update nixpkgs-gh`; tests/gate-tools.test.sh guards the floor.
+    nixpkgs-gh.url = "github:NixOS/nixpkgs/nixpkgs-26.05-darwin";
     # Use `github:nix-darwin/nix-darwin/nix-darwin-26.05` to use Nixpkgs 26.05.
     nix-darwin.url = "github:nix-darwin/nix-darwin/nix-darwin-26.05";
     nix-darwin.inputs.nixpkgs.follows = "nixpkgs";
@@ -14,7 +19,7 @@
     nix-homebrew.url = "github:zhaofengli/nix-homebrew";
   };
 
-  outputs = inputs@{ self, nix-darwin, nix-homebrew, home-manager, nixpkgs }:
+  outputs = inputs@{ self, nix-darwin, nix-homebrew, home-manager, nixpkgs, nixpkgs-gh }:
     let
       lib = nixpkgs.lib;
 
@@ -46,7 +51,11 @@
             inherit system;
             config.allowUnfree = true;
           };
-          extraSpecialArgs = { inherit user profile dotfilesRev; };
+          extraSpecialArgs = {
+            inherit user profile dotfilesRev;
+            # gh for the workstation profile only; see home.nix.
+            ghPackage = (import nixpkgs-gh { inherit system; }).gh;
+          };
           modules = [ ./home.nix ];
         };
 

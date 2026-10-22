@@ -1,4 +1,4 @@
-{ config, pkgs, lib, user, profile ? "workstation", dotfilesRev ? "unknown", ... }:
+{ config, pkgs, lib, user, profile ? "workstation", dotfilesRev ? "unknown", ghPackage ? null, ... }:
 
 let
   dotfiles = "${config.home.homeDirectory}/.dotfiles";
@@ -78,11 +78,17 @@ in
     # Linux equivalents of the macOS Homebrew casks/brews in configuration.nix.
     # Vendor-installed CLIs stay outside Nix; see tools/bash-tools.sh.
     wezterm
-    gh        # gh-axi (node-tools activation) wraps it
     awscli2   # AWS CLI v2, install only
     shellcheck  # shell script linter
     actionlint  # GitHub Actions workflow linter
+    # magick and convert, for the PR evidence gate's images
+    imagemagick
   ] ++ lib.optionals (stdenv.isLinux && isWorkstation) [
+    # gh-axi (node-tools activation) wraps gh. Only the workstation gets one
+    # from Nix, from the newer pin in flake.nix (the PR evidence gate needs
+    # 2.99+). The devcontainer image installs gh from GitHub's apt repo, and
+    # a Nix gh in ~/.nix-profile/bin would hide that newer copy on PATH.
+    ghPackage
     # Build/run devcontainers from the CLI; needs a Docker host.
     devcontainer
   ];
