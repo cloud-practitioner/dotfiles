@@ -15,6 +15,8 @@ One repo, one command, and a fresh Mac ends up configured the same way every tim
 
 It's primarily a macOS (nix-darwin) config, but it also runs on Linux via standalone home-manager - see [Linux](#linux).
 
+[VISION.md](VISION.md) sets the intended Linux/WSL2 direction, not current behavior; this README describes the implementation available today.
+
 ## Contributing / Using This Repo
 
 These are my personal dotfiles, shared publicly so people can read them, learn from them, and fork them freely.
