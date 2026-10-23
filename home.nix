@@ -78,11 +78,16 @@ in
     # Linux equivalents of the macOS Homebrew casks/brews in configuration.nix.
     # Vendor-installed CLIs stay outside Nix; see tools/bash-tools.sh.
     wezterm
-    gh        # gh-axi (node-tools activation) wraps it
     awscli2   # AWS CLI v2, install only
     shellcheck  # shell script linter
     actionlint  # GitHub Actions workflow linter
+    # The PR evidence gate uses magick and convert to make images.
+    imagemagick
   ] ++ lib.optionals (stdenv.isLinux && isWorkstation) [
+    # gh-axi uses gh. The workstation installs gh from Nixpkgs.
+    # The devcontainer image installs gh from GitHub's apt repo.
+    # A Nix gh would hide the image's gh on PATH.
+    gh
     # Build/run devcontainers from the CLI; needs a Docker host.
     devcontainer
   ];
