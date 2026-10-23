@@ -1056,7 +1056,16 @@ test_paseo() {
   out=$(PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") || fail "a switch with the latest paseo failed: $out"
   [ "$(calls)" = "$QUIET_RERUN" ] && [ -z "$out" ] || fail "the latest paseo was reinstalled or the switch was noisy: $(calls) $out"
 
+  # A prerelease with the same numeric version is not the registry's stable release.
+  fake_axi_tool "$bin" paseo 9.9.9-beta.3
+  : >"$NODE_TOOLS_LOG"
+  out=$(PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") || fail "a switch from a paseo prerelease failed: $out"
+  [ "$("$bin/paseo" --version)" = "paseo 9.9.9" ] || fail "paseo stayed at a prerelease instead of the registry's latest stable release: $("$bin/paseo" --version)"
+  [ "$(calls)" = "$PASEO_ADD
+$QUIET_RERUN" ] || fail "a prerelease switch did not install only paseo at latest: $(calls)"
+
   # A new upstream release is picked up on the next switch, with no pin or floor involved.
+  : >"$NODE_TOOLS_LOG"
   out=$(NPM_FAKE_PASEO_VERSION=10.0.0 PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") || fail "a switch after a new paseo release failed: $out"
   [ "$out" = "node-tools: $PASEO_ADD" ] || fail "a new paseo release printed more than the npm line: $out"
   [ "$("$bin/paseo" --version)" = "paseo 10.0.0" ] || fail "paseo did not follow the registry's latest"

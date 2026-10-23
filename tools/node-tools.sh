@@ -281,12 +281,13 @@ ensure_npm_globals() {
   npm_install_missing "${NPM_PACKAGES[@]}"
 }
 
-# The first x.y.z of `$1 --version`; fails when $1 is missing or prints none.
+# The first semver of `$1 --version`, including prerelease/build suffixes;
+# fails when $1 is missing or prints none.
 tool_version() {
   local out version
   command -v "$1" >/dev/null 2>&1 || return 1
   out=$("$1" --version 2>/dev/null </dev/null) || return 1
-  version=$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' <<<"$out" | sed -n 1p)
+  version=$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?' <<<"$out" | sed -n 1p)
   [ -n "$version" ] || return 1
   printf '%s\n' "$version"
 }
