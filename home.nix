@@ -117,7 +117,7 @@ in
           bash coreutils curl findutils gawk git gnugrep gnused gnutar gzip util-linux xz
         ])}:$PATH" \
         ${pkgs.bash}/bin/bash ${./tools/node-tools.sh} ${if isWorkstation then "workstation" else "container"}; then
-        warnEcho "tools/node-tools.sh failed (see above): ${if isWorkstation then "nvm, Node.js, " else ""}pnpm, the pnpm or npm global tools (arc-1, ui5, cds, mbt, yo and its generators, ...), the AXI worker-orchestration tools (gh-axi, chrome-devtools-axi, lavish-axi, tasks-axi, quota-axi) or their agent hooks, or the agent skills may be missing. Fix that, then switch again."
+        warnEcho "tools/node-tools.sh failed (see above): ${if isWorkstation then "nvm, Node.js, " else ""}pnpm, the pnpm or npm global tools (arc-1, ui5, cds, mbt, yo and its generators, ...), the AXI worker-orchestration tools (gh-axi, chrome-devtools-axi, lavish-axi, tasks-axi, quota-axi), the Paseo CLI, or their agent hooks, or the agent skills may be missing. Fix that, then switch again."
       fi
     ''
   );

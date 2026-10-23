@@ -30,7 +30,7 @@ Running the switch builds:
 - System settings (dark mode, key repeat, dock, Finder, trackpad)
 - Homebrew apps (casks and CLI tools)
 - Nix user packages (ripgrep, fd, fzf, jq, bun, lazygit, Neovim, Hack Nerd Font)
-- On Linux, a shared switch-time toolchain of agent CLIs, treehouse and the AXI worker-orchestration tools, npm and pnpm global tools (UI5, CAP, MTA, Yeoman generators, ...), and agent skills - see [Upstream CLI tools](#upstream-cli-tools)
+- On Linux, a shared switch-time toolchain of agent CLIs, treehouse, the AXI worker-orchestration tools, and the Paseo CLI, npm and pnpm global tools (UI5, CAP, MTA, Yeoman generators, ...), and agent skills - see [Upstream CLI tools](#upstream-cli-tools)
 - Shell (zsh, aliases, starship prompt)
 - Editor (Neovim config with the rose-pine moon theme)
 - Terminal (WezTerm config with the rose-pine moon theme and dimmed unfocused windows)
@@ -208,6 +208,13 @@ Yeoman and its generators must use npm, not pnpm: `yo` only discovers generators
 They install at `@latest` into npm's global prefix (below) when missing, below a version floor, or unable to report a version; `AXI_TOOLS` in [`tools/node-tools.sh`](tools/node-tools.sh) owns the floor values. The Chrome floor requires its `setup hooks` command; the other floors come from that orchestrator's own bootstrap, so raise those there first.
 A tool at or above its floor is left alone, so the next switch never downgrades or pins them and their own updates stand; a registry whose latest is still below a floor is reported as a failed step.
 When the devcontainer image or the orchestrator's own bootstrap has already put compatible tools in the container's npm prefix, the switch reuses them without installing a second copy. Prefix selection for both profiles is described below.
+**The Paseo CLI** (`paseo`, from the npm package `@getpaseo/cli`) is also an npm global in `tools/node-tools.sh`, and it is never pinned.
+The worker orchestration's Paseo runtime backend needs it, at 0.8 or newer, together with `jq` (a Nix package in both profiles) and `treehouse` (above).
+Unlike the tools above, every switch follows upstream: it asks the npm registry for the latest version and installs `@getpaseo/cli@latest` when that differs from the installed `paseo`.
+A switch with the latest version already installed does nothing. With the registry unreachable, an installed `paseo` is kept and the switch prints a warning; a missing one is reported as a failed step.
+A registry whose latest is below 0.8.0 is also reported as a failed step. The Paseo daemon and desktop app are not installed or started.
+Not provisioned yet, on purpose: Rex (its Linux preview needs a Discord login and a secret package token) and Orca (a desktop app only, and its Linux CLI is `orca-ide`, not `orca`).
+
 Each switch then runs `gh-axi setup hooks`, `chrome-devtools-axi setup hooks`, and `lavish-axi setup hooks` (quiet when nothing changes, and a repair when a hook is stale), which add SessionStart hooks to the agents' own configuration: `~/.claude/settings.json`, `~/.codex/hooks.json` and `~/.codex/config.toml`, `~/.config/opencode/plugins/axi-*.js`, and, for `lavish-axi`, the Copilot CLI's hooks directory (`$COPILOT_HOME/hooks`, default `~/.copilot/hooks`).
 Of those, only Claude Code's settings are Home Manager-managed: `home/.claude/settings.json` already declares all three hooks. The script restores an existing `~/.claude/settings.json` byte for byte if a tool changes it, or removes a plain file created by hook setup so it cannot collide with Home Manager's link. For `CLAUDE_CONFIG_DIR` and its link/merge rules, see [Devcontainers](#devcontainers). Pi has no such hooks, and nothing else Home Manager manages is touched.
 `gh-axi` uses the GitHub CLI. The Linux workstation profile installs `gh` from Nixpkgs.
@@ -241,7 +248,7 @@ Apply changes the same way in each environment:
 - **WSL2 workstation**: pull and re-run `rebuild.sh`, as [Linux](#linux) shows.
 - **Devcontainer**: `hm-update`, as [Devcontainers](#devcontainers) shows.
 
-To check without applying, `bash tests/upstream-tools.test.sh` checks that neither profile installs Nix-built copies of the agent CLIs, `bash tests/aws-cli.test.sh` checks that both ship AWS CLI v2, `bash tests/lint-tools.test.sh` checks that both ship shellcheck and actionlint and run the step that installs the no-mistakes skill, and `bash tests/node-tools.test.sh` checks both install scripts (including the AXI tools, their hooks, and treehouse) against local fakes, and herdr's against its real installer. The latter requires Node.js and pnpm on `PATH` for semantic checks of generated pnpm configuration, plus GNU `timeout` for the policy-check fixtures.
+To check without applying, `bash tests/upstream-tools.test.sh` checks that neither profile installs Nix-built copies of the agent CLIs, `bash tests/aws-cli.test.sh` checks that both ship AWS CLI v2, `bash tests/lint-tools.test.sh` checks that both ship shellcheck and actionlint and run the step that installs the no-mistakes skill, and `bash tests/node-tools.test.sh` checks both install scripts (including the AXI tools, their hooks, the Paseo CLI, and treehouse) against local fakes, and herdr's against its real installer. The latter requires Node.js and pnpm on `PATH` for semantic checks of generated pnpm configuration, plus GNU `timeout` for the policy-check fixtures.
 
 Run `bash tests/gate-tools.test.sh` to check the PR evidence tools without applying the profiles.
 This test checks that both Linux profiles provide ImageMagick.
