@@ -6,7 +6,8 @@
 #   default, and pnpm (the container uses its image's), then the pnpm globals,
 #   the npm globals (yo, mbt, mta, and the generators), @sap/cf-tools-local
 #   on amd64, the AXI tools Firstmate uses (gh-axi, chrome-devtools-axi,
-#   lavish-axi, tasks-axi, quota-axi) and their `setup hooks`, and the agent
+#   lavish-axi, tasks-axi, quota-axi) and their `setup hooks`, the Paseo CLI
+#   (@getpaseo/cli, always at the registry's latest), and the agent
 #   skills;
 # - tools/bash-tools.sh: herdr, Pi, the GitHub Copilot CLI, Claude Code,
 #   Antigravity, and treehouse from their own installers.
@@ -185,6 +186,7 @@ prefix=\${NPM_CONFIG_PREFIX:-\$(cd "\$(dirname "\$0")/.." && pwd)}
 case "\$1 \$2" in
   "prefix -g") [ -z "\${NPM_FAKE_PREFIX_FAIL-}" ] || exit 1; echo "\$prefix" ;;
   "root -g") echo "\$prefix/lib/node_modules" ;;
+  "view @getpaseo/cli") [ -z "\${NPM_FAKE_VIEW_FAIL-}" ] || exit 1; echo "\${NPM_FAKE_PASEO_VERSION:-9.9.9}" ;;
   "install -g")
     echo "npm \$*" >>"\$NODE_TOOLS_LOG"
     shift 2
@@ -195,6 +197,13 @@ case "\$1 \$2" in
       esac
       [ -z "\${NPM_FAKE_FAIL-}" ] || { echo "npm ERR! network" >&2; exit 1; }
       case "\$pkg" in
+        @getpaseo/cli@latest)
+          mkdir -p "\$prefix/lib/node_modules/@getpaseo/cli" "\$prefix/bin"
+          echo '{}' >"\$prefix/lib/node_modules/@getpaseo/cli/package.json"
+          # NPM_FAKE_PASEO_VERSION is what the registry's latest is.
+          sed "s/@VERSION@/\${NPM_FAKE_PASEO_VERSION:-9.9.9}/" "$FIX/fake-axi" >"\$prefix/bin/paseo"
+          chmod +x "\$prefix/bin/paseo"
+          continue ;;
         gh-axi@latest | chrome-devtools-axi@latest | lavish-axi@latest | tasks-axi@latest | quota-axi@latest)
           pkg=\${pkg%@latest}
           mkdir -p "\$prefix/lib/node_modules/\$pkg" "\$prefix/bin"
@@ -630,6 +639,7 @@ NPM_ADD="npm install -g --allow-scripts=mbt,mta mbt mta yo generator-easy-ui5 @s
 CF_LOCAL_ADD="npm install -g --allow-scripts=@sap/cf-tools-local @sap/cf-tools-local"
 YO_SMOKE="yo --generators --no-insight"
 AXI_ADD="npm install -g gh-axi@latest chrome-devtools-axi@latest lavish-axi@latest tasks-axi@latest quota-axi@latest"
+PASEO_ADD="npm install -g @getpaseo/cli@latest"
 AXI_HOOKS="gh-axi setup hooks
 chrome-devtools-axi setup hooks
 lavish-axi setup hooks"
@@ -646,6 +656,7 @@ $SKILLS_ADD
 $NPM_ADD${AMD64:+
 $CF_LOCAL_ADD}
 $AXI_ADD
+$PASEO_ADD
 $QUIET_RERUN"
 # What bash-tools.sh installs for HOME $1.
 bash_installs() {
@@ -1031,6 +1042,65 @@ $QUIET_RERUN" ] || fail "workstation did not upgrade only legacy Chrome: $(calls
   [ "$("$home/.nvm/default/bin/chrome-devtools-axi" --version)" = "chrome-devtools-axi 9.9.9" ] \
     && [ -f "$home/.config/opencode/plugins/axi-chrome-devtools-axi.js" ] || fail "workstation did not upgrade Chrome and install its hook"
   pass "AXI tools: installed at @latest into npm's global prefix when missing or below their floors, in one call; left alone at or above them (no second copy next to the image's or Firstmate's); a floor missed after the install is reported; a failing install does not stop the other steps; the workstation uses nvm's prefix"
+}
+
+test_paseo() {
+  local home="$TMP_ROOT/paseo" out bin
+  mkdir -p "$home"
+  bin="$home/.npm-global/bin"
+  PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH" >/dev/null || fail "setup for the Paseo CLI failed"
+  [ "$("$bin/paseo" --version)" = "paseo 9.9.9" ] || fail "a fresh switch did not install the registry's latest paseo"
+
+  # Current: nothing is installed and the switch stays quiet.
+  : >"$NODE_TOOLS_LOG"
+  out=$(PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") || fail "a switch with the latest paseo failed: $out"
+  [ "$(calls)" = "$QUIET_RERUN" ] && [ -z "$out" ] || fail "the latest paseo was reinstalled or the switch was noisy: $(calls) $out"
+
+  # A prerelease with the same numeric version is not the registry's stable release.
+  fake_axi_tool "$bin" paseo 9.9.9-beta.3
+  : >"$NODE_TOOLS_LOG"
+  out=$(PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") || fail "a switch from a paseo prerelease failed: $out"
+  [ "$("$bin/paseo" --version)" = "paseo 9.9.9" ] || fail "paseo stayed at a prerelease instead of the registry's latest stable release: $("$bin/paseo" --version)"
+  [ "$(calls)" = "$PASEO_ADD
+$QUIET_RERUN" ] || fail "a prerelease switch did not install only paseo at latest: $(calls)"
+
+  # A new upstream release is picked up on the next switch, with no pin or floor involved.
+  : >"$NODE_TOOLS_LOG"
+  out=$(NPM_FAKE_PASEO_VERSION=10.0.0 PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") || fail "a switch after a new paseo release failed: $out"
+  [ "$out" = "node-tools: $PASEO_ADD" ] || fail "a new paseo release printed more than the npm line: $out"
+  [ "$("$bin/paseo" --version)" = "paseo 10.0.0" ] || fail "paseo did not follow the registry's latest"
+  [ "$(calls | grep -c '@getpaseo/cli')" = 1 ] || fail "paseo was installed more than once: $(calls)"
+
+  # Offline registry: an installed paseo is kept with a warning; a missing one fails the step.
+  : >"$NODE_TOOLS_LOG"
+  out=$(NPM_FAKE_VIEW_FAIL=1 PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") || fail "an offline switch failed with paseo installed: $out"
+  assert_contains "$out" "keeping paseo 10.0.0" "an offline switch did not say it kept paseo: $out"
+  [ "$(calls)" = "$QUIET_RERUN" ] || fail "an offline switch tried to install paseo: $(calls)"
+  rm "$bin/paseo"
+  if out=$(NPM_FAKE_VIEW_FAIL=1 PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH"); then
+    fail "an offline switch without paseo succeeded: $out"
+  fi
+  assert_contains "$out" "paseo is missing and npm cannot read the latest @getpaseo/cli" "a missing paseo with an offline registry is not named: $out"
+  assert_contains "$out" "paseo did not complete" "a missing paseo is not reported as a failed step: $out"
+
+  # A failing install is reported.
+  if out=$(NPM_FAKE_FAIL=1 PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH"); then
+    fail "a failing paseo install was accepted: $out"
+  fi
+  assert_contains "$out" "npm install -g @getpaseo/cli@latest failed" "a failed paseo install is not reported: $out"
+
+  # A registry whose latest is below the 0.8.0 floor is reported.
+  if out=$(NPM_FAKE_PASEO_VERSION=0.7.9 PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH"); then
+    fail "a paseo below the 0.8.0 floor was accepted: $out"
+  fi
+  assert_contains "$out" "paseo is still missing or below 0.8.0" "a paseo below the floor is not named: $out"
+
+  # The workstation installs it into nvm's default Node.js, on PATH there.
+  home="$TMP_ROOT/paseo-ws"
+  mkdir -p "$home"
+  run_tools "$home" workstation "$BASE_PATH" >/dev/null || fail "workstation setup for the Paseo CLI failed"
+  [ "$("$home/.nvm/default/bin/paseo" --version)" = "paseo 9.9.9" ] || fail "workstation: paseo is not in nvm's default Node.js bin"
+  pass "Paseo CLI: @getpaseo/cli installed at the registry's latest when missing or different, so every switch follows upstream; left alone when current; an offline registry keeps an installed copy; the 0.8.0 floor, a failing install, and a missing copy are reported; the workstation uses nvm's prefix"
 }
 
 test_axi_hooks() {
@@ -1742,6 +1812,7 @@ test_container_and_failures
 test_step_failures_do_not_block
 test_smoke_checks_warn
 test_axi_tools
+test_paseo
 test_axi_hooks
 test_treehouse
 test_arc1_policy_check

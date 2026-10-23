@@ -30,7 +30,8 @@
 # - the AXI tools Firstmate uses: gh-axi, chrome-devtools-axi, lavish-axi,
 #   tasks-axi, and quota-axi, also npm globals but installed at @latest when
 #   missing or below the version floors in AXI_TOOLS (never downgraded or
-#   pinned). Then `setup hooks`
+#   pinned). For the Paseo CLI's refresh policy, see README.md's "Upstream
+#   CLI tools" section. Then `setup hooks`
 #   for gh-axi, chrome-devtools-axi, and lavish-axi, which writes SessionStart
 #   hooks for Claude Code, Codex, OpenCode (and, for lavish-axi, the Copilot
 #   CLI). Claude Code's settings.json is Home Manager's (home/.claude/
@@ -92,6 +93,9 @@ SKILLS_DIR=$HOME/.agents/skills
 # tool:minimum version.
 AXI_TOOLS=(gh-axi:0.1.29 chrome-devtools-axi:0.1.23 lavish-axi:0.1.80 tasks-axi:0.2.6 quota-axi:0.1.51)
 AXI_HOOK_TOOLS=(gh-axi chrome-devtools-axi lavish-axi)
+# The Paseo CLI package and the oldest version the worker orchestration accepts.
+PASEO_PACKAGE=@getpaseo/cli
+PASEO_MIN=0.8.0
 
 problems=()
 
@@ -276,12 +280,13 @@ ensure_npm_globals() {
   npm_install_missing "${NPM_PACKAGES[@]}"
 }
 
-# The first x.y.z of `$1 --version`; fails when $1 is missing or prints none.
+# The first semver of `$1 --version`, including prerelease/build suffixes;
+# fails when $1 is missing or prints none.
 tool_version() {
   local out version
   command -v "$1" >/dev/null 2>&1 || return 1
   out=$("$1" --version 2>/dev/null </dev/null) || return 1
-  version=$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' <<<"$out" | sed -n 1p)
+  version=$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?' <<<"$out" | sed -n 1p)
   [ -n "$version" ] || return 1
   printf '%s\n' "$version"
 }
@@ -317,6 +322,26 @@ ensure_axi_tools() {
     axi_tool_current "$tool" "$min" \
       || oops "$tool is still missing or below $min after npm install -g (is npm's global bin on PATH?)" || return 1
   done
+}
+
+# See README.md's "Upstream CLI tools" for Paseo's refresh policy.
+# The runtime's minimum must also be checked after an offline fallback.
+ensure_paseo() {
+  local have latest
+  have=$(tool_version paseo) || have=
+  if latest=$(npm view "$PASEO_PACKAGE" version 2>/dev/null </dev/null) && [ -n "$latest" ]; then
+    if [ "$have" != "$latest" ]; then
+      say "npm install -g $PASEO_PACKAGE@latest"
+      npm install -g "$PASEO_PACKAGE@latest" >/dev/null \
+        || oops "npm install -g $PASEO_PACKAGE@latest failed (offline?)" || return 1
+    fi
+  elif [ -z "$have" ]; then
+    oops "paseo is missing and npm cannot read the latest $PASEO_PACKAGE (offline?)" || return 1
+  else
+    printf 'node-tools: cannot read the latest %s from npm (offline?); keeping paseo %s\n' "$PASEO_PACKAGE" "$have" >&2
+  fi
+  axi_tool_current paseo "$PASEO_MIN" \
+    || oops "paseo is still missing or below $PASEO_MIN after npm install -g (is npm's global bin on PATH?)" || return 1
 }
 
 # `<tool> setup hooks` for the AXI tools that have it, on every switch: it is
@@ -545,6 +570,7 @@ main() {
   step ensure_npm_globals
   step ensure_cf_tools_local
   step ensure_axi_tools
+  step ensure_paseo
   step ensure_axi_hooks
   smoke_checks
   [ "${#problems[@]}" -eq 0 ] || {
