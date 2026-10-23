@@ -30,9 +30,8 @@
 # - the AXI tools Firstmate uses: gh-axi, chrome-devtools-axi, lavish-axi,
 #   tasks-axi, and quota-axi, also npm globals but installed at @latest when
 #   missing or below the version floors in AXI_TOOLS (never downgraded or
-#   pinned). The Paseo CLI (`paseo`, @getpaseo/cli) is another npm global that
-#   floats: every switch installs the registry's latest when it differs from
-#   the installed one. Then `setup hooks`
+#   pinned). For the Paseo CLI's refresh policy, see README.md's "Upstream
+#   CLI tools" section. Then `setup hooks`
 #   for gh-axi, chrome-devtools-axi, and lavish-axi, which writes SessionStart
 #   hooks for Claude Code, Codex, OpenCode (and, for lavish-axi, the Copilot
 #   CLI). Claude Code's settings.json is Home Manager's (home/.claude/
@@ -325,11 +324,8 @@ ensure_axi_tools() {
   done
 }
 
-# The Paseo CLI, an npm global that always floats at the registry's latest:
-# installed when missing or when the installed version differs from the
-# registry's, so every switch follows upstream. An unreachable registry keeps
-# an installed paseo (with a warning on stderr) and fails only when it is
-# missing. Then the installed version is checked against Firstmate's floor.
+# See README.md's "Upstream CLI tools" for Paseo's refresh policy.
+# The runtime's minimum must also be checked after an offline fallback.
 ensure_paseo() {
   local have latest
   have=$(tool_version paseo) || have=
