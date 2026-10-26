@@ -160,9 +160,14 @@ test_zero_coupling_and_state_file() {
     assert_not_contains "$(cat "$file")" "$pat_dash" "$file mentions $pat_dash"
     assert_not_contains "$(cat "$file")" "$separator" "$file contains the operational separator"
   done
-  # The upstream project name may appear only in a license attribution.
-  local attribution_name="First""mate"
-  license_hits=$(grep -rni "$attribution_name" "$CALM_DIR" "$ROOT/README.md" "$ROOT/home.nix" 2>/dev/null | grep -v "Adapted from" || true)
+  # The upstream project name may appear only in a license attribution. Scope:
+  # the Calm extension, home.nix, and the README's Calm section. Other README
+  # sections (herdr, Paseo) document the upstream project legitimately.
+  local attribution_name="First""mate" readme_calm
+  readme_calm=$(awk '/^### Pi Calm$/ {on=1; next} on && /^#{1,3} / {exit} on' "$ROOT/README.md")
+  [ -n "$readme_calm" ] || fail "README.md lost its Pi Calm section"
+  license_hits=$( { grep -rni "$attribution_name" "$CALM_DIR" "$ROOT/home.nix" 2>/dev/null || true
+    printf '%s\n' "$readme_calm" | grep -ni "$attribution_name" | sed 's/^/README.md Pi Calm section:/' || true; } | grep -v "Adapted from" || true)
   [ -z "$license_hits" ] || fail "unexpected upstream references outside license attribution: $license_hits"
   grep -q "MIT License" "$CALM_DIR/LICENSE" || fail "calm LICENSE lost the MIT permission text"
   grep -q "Copyright (c) 2026 Kun Chen" "$CALM_DIR/LICENSE" || fail "calm LICENSE lost the copyright notice"
