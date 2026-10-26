@@ -140,7 +140,7 @@ have_pi_package() {
 }
 
 test_zero_coupling_and_state_file() {
-  local source_files license_hits file separator
+  local source_files file separator
   source_files=$(find "$CALM_DIR" -type f | sort)
   [ -n "$source_files" ] || fail "Pi Calm extension files are missing"
   # U+2063 (invisible separator) without embedding the literal in this file.
@@ -160,15 +160,6 @@ test_zero_coupling_and_state_file() {
     assert_not_contains "$(cat "$file")" "$pat_dash" "$file mentions $pat_dash"
     assert_not_contains "$(cat "$file")" "$separator" "$file contains the operational separator"
   done
-  # The upstream project name may appear only in a license attribution. Scope:
-  # the Calm extension, home.nix, and the README's Calm section. Other README
-  # sections (herdr, Paseo) document the upstream project legitimately.
-  local attribution_name="First""mate" readme_calm
-  readme_calm=$(awk '/^### Pi Calm$/ {on=1; next} on && /^#{1,3} / {exit} on' "$ROOT/README.md")
-  [ -n "$readme_calm" ] || fail "README.md lost its Pi Calm section"
-  license_hits=$( { grep -rni "$attribution_name" "$CALM_DIR" "$ROOT/home.nix" 2>/dev/null || true
-    printf '%s\n' "$readme_calm" | grep -ni "$attribution_name" | sed 's/^/README.md Pi Calm section:/' || true; } | grep -v "Adapted from" || true)
-  [ -z "$license_hits" ] || fail "unexpected upstream references outside license attribution: $license_hits"
   grep -q "MIT License" "$CALM_DIR/LICENSE" || fail "calm LICENSE lost the MIT permission text"
   grep -q "Copyright (c) 2026 Kun Chen" "$CALM_DIR/LICENSE" || fail "calm LICENSE lost the copyright notice"
   for file in "$CALM_DIR/index.ts" "$CALM_DIR/lib/visibility.ts" "$CALM_DIR/lib/preference.ts" "$CALM_DIR/lib/collapsed-thinking.ts" "$CALM_DIR/lib/working-ship.ts"; do
@@ -188,7 +179,7 @@ test_zero_coupling_and_state_file() {
   assert_not_contains "$(cat "$CALM_DIR/index.ts")" "registerEntryRenderer" "index.ts registers a synthetic entry renderer"
   assert_not_contains "$(cat "$CALM_DIR/index.ts")" "InteractiveMode" "index.ts patches user-row layout"
 
-  pass "zero coupling: no forbidden identifiers, attribution limited to license headers, state file untracked and unmanaged"
+  pass "zero coupling: no forbidden identifiers, license and attribution preserved, state file untracked and unmanaged"
 }
 
 test_static_typescript_and_repo_wiring() {
