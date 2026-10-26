@@ -480,6 +480,8 @@ in
     config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.pi/agent/models.json";
   home.file.".pi/agent/settings.json".source =
     config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.pi/agent/settings.json";
+  home.file.".pi/agent/keybindings.json".source =
+    config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.pi/agent/keybindings.json";
 
   home.file.".claude/CLAUDE.md".source =
     config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/AGENTS.md";
@@ -511,5 +513,13 @@ in
   home.activation.piMemory = lib.hm.dag.entryAfter [ "linkGeneration" ] ''
     run ${pkgs.bash}/bin/bash ${./activation/pi-memory.sh} install \
       ${lib.escapeShellArg "${dotfiles}/home/AGENTS.md"}
+  '';
+
+  # Same for Pi's keybindings: activation/pi-keybindings.sh links
+  # keybindings.json into $PI_CODING_AGENT_DIR when it points elsewhere, unless
+  # a file of that name exists there. Unset, it does nothing.
+  home.activation.piKeybindings = lib.hm.dag.entryAfter [ "linkGeneration" ] ''
+    run ${pkgs.bash}/bin/bash ${./activation/pi-keybindings.sh} install \
+      ${lib.escapeShellArg "${dotfiles}/home/.pi/agent/keybindings.json"}
   '';
 }

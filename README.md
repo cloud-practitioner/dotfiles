@@ -548,6 +548,11 @@ a warning because Pi resolves them from its working directory. The same
 environment caveat as for Claude applies: run `hm-update` or `rebuild.sh`
 from a shell where the variable is set. `tests/pi-memory.test.sh` checks it.
 
+`~/.pi/agent/keybindings.json` (the Ctrl+Backspace, Ctrl+H and Ctrl+Delete word-delete keys; see [Optional Pi configuration](#optional-pi-configuration)) follows the same rule:
+`activation/pi-keybindings.sh` links it into `$PI_CODING_AGENT_DIR` only when no `keybindings.json` exists there.
+An existing file or link is kept untouched with a warning.
+`tests/pi-keybindings.test.sh` checks it.
+
 After the next switch, use `readlink -f` to check that
 `~/.pi/agent/AGENTS.md` (or `$PI_CODING_AGENT_DIR/AGENTS.md` for an override)
 resolves to the same file as `~/.dotfiles/home/AGENTS.md`. If activation warned
@@ -603,6 +608,7 @@ If you don't use it, just remove it from `brews` in your copy.
 - `tools/ixia-marketplace.sh` - keeps the shallow clone of the Ixia plugin marketplace that Pi loads on demand (see [Ixia plugins](#ixia-plugins-claude-code-and-pi)).
 - `activation/claude-config.sh` - the activation steps that install the Claude Code files into `$CLAUDE_CONFIG_DIR` when it points somewhere other than `~/.claude` (see [Devcontainers](#devcontainers)).
 - `activation/pi-memory.sh` - the activation step that links `home/AGENTS.md` into `$PI_CODING_AGENT_DIR` when it points somewhere other than `~/.pi/agent` (see [Devcontainers](#devcontainers)).
+- `activation/pi-keybindings.sh` - the same for `home/.pi/agent/keybindings.json`, which is never overwritten if `$PI_CODING_AGENT_DIR` already holds one (see [Devcontainers](#devcontainers)).
 - `rebuild.sh` - re-applies the config after the first switch.
   Auto-detects a devcontainer and picks the container profile; otherwise uses the workstation profile. Run this every time you make a change; to pick up pushed changes on WSL2, pull first (see [Linux](#linux)).
 - `home/` - the actual config files that get symlinked into place; the sections below explain the shared symlink model and Pi's narrower selective setup.
@@ -632,7 +638,7 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 brew install --cask kunchenguid/tap/pi-launcher
 ```
 
-Home Manager owns exactly two repository-authored Pi directories: `~/.pi/agent/themes` and `~/.pi/agent/extensions`. It also links `models.json`, `settings.json` and `AGENTS.md` as individual files; see [Devcontainers](#devcontainers) for user-instruction loading and post-switch verification. The local extension directory is for public, repository-authored extensions only - third-party package code never belongs there. Run `/reload` after editing a local extension or other Pi resources. The terminal-title extension shows a spinner while Pi is working, then a completion mark with the session name or current directory. The `rose-pine-moon` theme was authored clean-room from the public [Rosé Pine Moon palette](https://rosepinetheme.com/palette) and Pi's [public theme schema](https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json), not from a private or live theme file.
+Home Manager owns exactly two repository-authored Pi directories: `~/.pi/agent/themes` and `~/.pi/agent/extensions`. It also links `models.json`, `settings.json`, `keybindings.json` and `AGENTS.md` as individual files; see [Devcontainers](#devcontainers) for user-instruction loading and post-switch verification. The local extension directory is for public, repository-authored extensions only - third-party package code never belongs there. Run `/reload` after editing a local extension or other Pi resources. `keybindings.json` adds Ctrl+Backspace and Ctrl+H to Pi's word delete backward, and Ctrl+Delete to word delete forward, keeping Pi's own keys (Ctrl+W, Alt+Backspace, Alt+D, Alt+Delete). Windows Terminal without the Kitty keyboard protocol sends Ctrl+Backspace as the Ctrl+H byte, so Pi needs both keys. The terminal-title extension shows a spinner while Pi is working, then a completion mark with the session name or current directory. The `rose-pine-moon` theme was authored clean-room from the public [Rosé Pine Moon palette](https://rosepinetheme.com/palette) and Pi's [public theme schema](https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json), not from a private or live theme file.
 
 ### Pi Calm
 
