@@ -6,7 +6,8 @@
 #   default, and pnpm (the container uses its image's), then the pnpm globals,
 #   the npm globals (yo, mbt, mta, and the generators), @sap/cf-tools-local
 #   on amd64, the AXI tools Firstmate uses (gh-axi, chrome-devtools-axi,
-#   lavish-axi, tasks-axi, quota-axi) and their `setup hooks`, the Paseo CLI
+#   lavish-axi, tasks-axi, quota-axi) and their `setup hooks`, backpass and
+#   acpx, the Paseo CLI
 #   (@getpaseo/cli, always at the registry's latest), and the agent
 #   skills;
 # - tools/bash-tools.sh: herdr, Pi, the GitHub Copilot CLI, Claude Code,
@@ -204,7 +205,7 @@ case "\$1 \$2" in
           sed "s/@VERSION@/\${NPM_FAKE_PASEO_VERSION:-9.9.9}/" "$FIX/fake-axi" >"\$prefix/bin/paseo"
           chmod +x "\$prefix/bin/paseo"
           continue ;;
-        gh-axi@latest | chrome-devtools-axi@latest | lavish-axi@latest | tasks-axi@latest | quota-axi@latest)
+        gh-axi@latest | chrome-devtools-axi@latest | lavish-axi@latest | tasks-axi@latest | quota-axi@latest | backpass@latest | acpx@latest)
           pkg=\${pkg%@latest}
           mkdir -p "\$prefix/lib/node_modules/\$pkg" "\$prefix/bin"
           echo '{}' >"\$prefix/lib/node_modules/\$pkg/package.json"
@@ -639,6 +640,7 @@ NPM_ADD="npm install -g --allow-scripts=mbt,mta mbt mta yo generator-easy-ui5 @s
 CF_LOCAL_ADD="npm install -g --allow-scripts=@sap/cf-tools-local @sap/cf-tools-local"
 YO_SMOKE="yo --generators --no-insight"
 AXI_ADD="npm install -g gh-axi@latest chrome-devtools-axi@latest lavish-axi@latest tasks-axi@latest quota-axi@latest"
+BACKPASS_ADD="npm install -g backpass@latest acpx@latest"
 PASEO_ADD="npm install -g @getpaseo/cli@latest"
 AXI_HOOKS="gh-axi setup hooks
 chrome-devtools-axi setup hooks
@@ -656,6 +658,7 @@ $SKILLS_ADD
 $NPM_ADD${AMD64:+
 $CF_LOCAL_ADD}
 $AXI_ADD
+$BACKPASS_ADD
 $PASEO_ADD
 $QUIET_RERUN"
 # What bash-tools.sh installs for HOME $1.
@@ -1042,6 +1045,62 @@ $QUIET_RERUN" ] || fail "workstation did not upgrade only legacy Chrome: $(calls
   [ "$("$home/.nvm/default/bin/chrome-devtools-axi" --version)" = "chrome-devtools-axi 9.9.9" ] \
     && [ -f "$home/.config/opencode/plugins/axi-chrome-devtools-axi.js" ] || fail "workstation did not upgrade Chrome and install its hook"
   pass "AXI tools: installed at @latest into npm's global prefix when missing or below their floors, in one call; left alone at or above them (no second copy next to the image's or Firstmate's); a floor missed after the install is reported; a failing install does not stop the other steps; the workstation uses nvm's prefix"
+}
+
+test_backpass_tools() {
+  local home="$TMP_ROOT/backpass" out bin tool
+  mkdir -p "$home"
+  bin="$home/.npm-global/bin"
+
+  # A fresh container installs backpass and acpx at @latest, in one call, once
+  # the AXI tools are in; lavish-axi (the `backpass apply` review UI) is the
+  # AXI tools' own and is not installed a second time.
+  : >"$NODE_TOOLS_LOG"
+  PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH" >/dev/null || fail "setup for backpass failed"
+  assert_contains "$(calls)" "$BACKPASS_ADD" "a fresh switch did not install backpass and acpx in one call: $(calls)"
+  [ "$(calls | grep -c 'lavish-axi@latest')" = 1 ] || fail "lavish-axi was installed more than once: $(calls)"
+  for tool in backpass acpx; do
+    [ "$("$bin/$tool" --version)" = "$tool 9.9.9" ] || fail "$tool is not in npm's global bin"
+  done
+
+  # At or above the floors: nothing is installed, nothing is printed.
+  fake_axi_tool "$bin" backpass 0.1.41
+  fake_axi_tool "$bin" acpx 3.0.0
+  : >"$NODE_TOOLS_LOG"
+  out=$(PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") || fail "a switch with backpass at its floor failed: $out"
+  [ "$(calls)" = "$QUIET_RERUN" ] && [ -z "$out" ] || fail "backpass tools at their floors were reinstalled or the switch was noisy: $(calls) $out"
+  [ "$("$bin/backpass" --version)" = "backpass 0.1.41" ] || fail "backpass at its floor was replaced"
+  [ ! -e "$home/pnpm/bin/backpass" ] && [ ! -e "$home/.local/bin/acpx" ] || fail "a backpass tool was duplicated outside npm's global bin"
+
+  # Below a floor, or missing: only that tool is installed again.
+  fake_axi_tool "$bin" backpass 0.1.40
+  rm "$bin/acpx"
+  : >"$NODE_TOOLS_LOG"
+  out=$(PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH") || fail "a switch that upgrades backpass failed: $out"
+  [ "$(calls)" = "$BACKPASS_ADD
+$QUIET_RERUN" ] || fail "backpass below its floor and a missing acpx were not reinstalled in one call: $(calls)"
+  fake_axi_tool "$bin" acpx 0.21.0
+  : >"$NODE_TOOLS_LOG"
+  PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH" >/dev/null || fail "a switch that upgrades acpx failed"
+  [ "$(calls)" = "npm install -g acpx@latest
+$QUIET_RERUN" ] || fail "only acpx below its floor was not reinstalled alone: $(calls)"
+
+  # A registry whose latest is below the floor is reported, not looped on.
+  fake_axi_tool "$bin" backpass 0.1.0
+  if out=$(NPM_FAKE_AXI_VERSION=0.1.1 PNPM_HOME="$home/pnpm" run_tools "$home" container "$FIX/image:$BASE_PATH"); then
+    fail "a backpass still below its floor after npm install was accepted: $out"
+  fi
+  assert_contains "$out" "backpass is still missing or below 0.1.41" "a floor miss after the install is not named: $out"
+  assert_contains "$out" "backpass_tools did not complete" "a floor miss is not reported as a failed step: $out"
+
+  # The workstation installs them into nvm's default Node.js, on PATH there.
+  home="$TMP_ROOT/backpass-ws"
+  mkdir -p "$home"
+  run_tools "$home" workstation "$BASE_PATH" >/dev/null || fail "workstation setup for backpass failed"
+  for tool in backpass acpx; do
+    [ "$("$home/.nvm/default/bin/$tool" --version)" = "$tool 9.9.9" ] || fail "workstation: $tool is not in nvm's default Node.js bin"
+  done
+  pass "backpass and acpx: installed at @latest into npm's global prefix when missing or below their floors; left alone at or above them; a floor missed after the install is reported; the workstation uses nvm's prefix"
 }
 
 test_paseo() {
@@ -1812,6 +1871,7 @@ test_container_and_failures
 test_step_failures_do_not_block
 test_smoke_checks_warn
 test_axi_tools
+test_backpass_tools
 test_paseo
 test_axi_hooks
 test_treehouse
