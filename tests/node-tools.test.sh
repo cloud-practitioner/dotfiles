@@ -320,6 +320,10 @@ case "$1 $2" in
       case "$package" in
         @earendil-works/pi-coding-agent) name=pi ;;
         @github/copilot) name=copilot ;;
+        @ui5/mcp-server) name=ui5mcp ;;
+        @sap-ux/fiori-mcp-server) name=fiori-mcp ;;
+        @playwright/mcp) name=playwright-mcp ;;
+        sap-note-search-mcp) name=sap-note-search-mcp ;;
         *) name= ;;
       esac
       if [ "$command" = remove ]; then
@@ -328,7 +332,7 @@ case "$1 $2" in
       else
         mkdir -p "$root/h/node_modules/$package"
         echo '{}' >"$root/h/node_modules/$package/package.json"
-        [ -z "$name" ] || { mkdir -p "$bin"; printf '#!/bin/sh\necho pnpm-%s-fake\n' "$name" >"$bin/$name"; chmod +x "$bin/$name"; }
+        [ -z "$name" ] || { mkdir -p "$bin"; printf '#!/bin/sh\n[ "$1" = --version ] && echo "%s 9.9.9" || echo pnpm-%s-fake\n' "$name" "$name" >"$bin/$name"; chmod +x "$bin/$name"; }
       fi
     done
     ;;
@@ -626,7 +630,7 @@ agy_install_line() {
 }
 
 # What the scripts install, in order.
-PNPM_ADD="pnpm add -g arc-1@latest npm-run-all eslint npm-check-updates @ui5/cli @sap/cds-dk @sap/cf-tools @sap/ux-ui5-tooling @sap/html5-app-deployer odata-openapi @wdio/cli"
+PNPM_ADD="pnpm add -g arc-1@latest npm-run-all eslint npm-check-updates @ui5/cli @sap/cds-dk @sap/cf-tools @sap/ux-ui5-tooling @sap/html5-app-deployer odata-openapi @wdio/cli @ui5/mcp-server @sap-ux/fiori-mcp-server @playwright/mcp sap-note-search-mcp"
 NO_MISTAKES_SKILL_SOURCE=https://github.com/kunchenguid/no-mistakes/tree/v1.84.0/skills/no-mistakes
 nm_skill_add() {
   echo "npx --yes skills add https://github.com/kunchenguid/no-mistakes/tree/$1/skills/no-mistakes --agent universal --yes --global"
@@ -690,6 +694,9 @@ $NODE_INSTALLS" ] || fail "workstation did not install nvm, Node.js LTS as defau
   [ -d "$nvm_prefix/lib/node_modules/@sap/generator-fiori" ] || fail "the generators are not under npm's global prefix"
   [ ! -e "$home/.local/share/pnpm/global/v11/h/node_modules/yo" ] || fail "yo was installed with pnpm"
   "$NODE_TOOLS_POLICY_CHECK" "$home/.local/share/pnpm/global/pnpm-workspace.yaml" || fail "pnpm's global build policy is wrong"
+  for tool in ui5mcp fiori-mcp playwright-mcp sap-note-search-mcp; do
+    [ "$("$home/.local/share/pnpm/bin/$tool" --version)" = "$tool 9.9.9" ] || fail "workstation: the MCP server binary $tool does not run from pnpm's global bin"
+  done
   [ "$(cat "$home/.agents/skills/resolving-merge-conflicts/SKILL.md")" = pinned ] || fail "resolving-merge-conflicts is not the pinned copy"
   [ -f "$home/.agents/skills/find-skills/SKILL.md" ] || fail "find-skills is missing"
   [ "$(cat "$home/.agents/skills/no-mistakes/SKILL.md")" = "no-mistakes v1.84.0" ] || fail "workstation: the no-mistakes skill of the installed CLI version is missing"
@@ -716,7 +723,7 @@ $NODE_INSTALLS" ] || fail "workstation did not install nvm, Node.js LTS as defau
 test_only_missing_is_installed() {
   local home="$TMP_ROOT/ws" out root status
   root="$home/.nvm/versions/node/$FAKE_NODE/lib/node_modules"
-  rm -rf "$home/.local/share/pnpm/global/v11/h/node_modules/eslint" "$home/.local/share/pnpm/global/v11/h/node_modules/@ui5" \
+  rm -rf "$home/.local/share/pnpm/global/v11/h/node_modules/eslint" "$home/.local/share/pnpm/global/v11/h/node_modules/@ui5/cli" \
     "$root/mbt" "$root/@sap/generator-aicore" "$home/.agents/skills/find-skills"
   : >"$NODE_TOOLS_LOG"
   out=$(run_tools "$home" workstation "$BASE_PATH") || fail "node-tools after deleting some tools failed: $out"
@@ -788,6 +795,9 @@ test_container_and_failures() {
   done
   [ -x "$home/.npm-global/bin/mbt" ] && [ -x "$home/.npm-global/bin/mta" ] || fail "mbt and mta are not in ~/.npm-global/bin"
   [ ! -e "$home/.nvm" ] || fail "container installed nvm"
+  for tool in ui5mcp fiori-mcp playwright-mcp sap-note-search-mcp; do
+    [ "$("$home/pnpm-home/bin/$tool" --version)" = "$tool 9.9.9" ] || fail "container: the MCP server binary $tool does not run from pnpm's global bin"
+  done
   : >"$NODE_TOOLS_LOG"
   out="$out$(PNPM_HOME="$home/pnpm-home" run_bash_tools "$home" "$FIX/image:$BASE_PATH")" || fail "container bash-tools failed: $out"
   [ "$(calls)" = "$(bash_installs "$home")" ] || fail "container bash-tools did not only run the six vendor installers (including treehouse): $(calls)"
