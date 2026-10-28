@@ -15,14 +15,11 @@
 # - container: the devcontainer image's own Node.js and pnpm.
 #
 # Then, each on that Node.js:
-# - pnpm globals: arc-1, npm-run-all, eslint, npm-check-updates, @ui5/cli,
-#   @sap/cds-dk, @sap/cf-tools, @sap/ux-ui5-tooling, @sap/html5-app-deployer,
-#   odata-openapi, @wdio/cli, and the MCP servers the devcontainer launches
-#   (@ui5/mcp-server, @sap-ux/fiori-mcp-server, @playwright/mcp,
-#   sap-note-search-mcp; binaries ui5mcp, fiori-mcp, playwright-mcp,
-#   sap-note-search-mcp). pnpm's global directory gets a
-#   pnpm-workspace.yaml first, with allowBuilds for the packages whose build
-#   scripts may run (better-sqlite3, esbuild) or not (edgedriver, geckodriver);
+# - pnpm globals: see PNPM_PACKAGES for the install list and README.md's
+#   "Upstream CLI tools" section for the devcontainer MCP launch contract.
+#   pnpm's global directory gets a pnpm-workspace.yaml first, with allowBuilds
+#   for packages whose build scripts may run (better-sqlite3, esbuild) or not
+#   (edgedriver, geckodriver);
 # - npm globals: mbt, mta, yo, generator-easy-ui5, @sap-ux/generator-adp,
 #   @sap/generator-adaptation-project, @sap/generator-add-hdb-module,
 #   @sap/generator-aicore, @sap/generator-base-mta-module,
