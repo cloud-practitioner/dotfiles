@@ -95,8 +95,8 @@ SKILLS_DIR=$HOME/.agents/skills
 AXI_TOOLS=(gh-axi:0.1.29 chrome-devtools-axi:0.1.23 lavish-axi:0.1.80 tasks-axi:0.2.6 quota-axi:0.1.51)
 AXI_HOOK_TOOLS=(gh-axi chrome-devtools-axi lavish-axi)
 # backpass (agent memory review) and the acpx it drives, tool:minimum version.
-# backpass needs Node.js 22.5 or newer and acpx 22.13 or newer; both profiles
-# provide Node.js 24 LTS.
+# For Node.js prerequisites and profile provisioning, see README.md's
+# "Upstream CLI tools" section.
 BACKPASS_TOOLS=(backpass:0.1.41 acpx:0.21.1)
 # The Paseo CLI package and the oldest version the worker orchestration accepts.
 PASEO_PACKAGE=@getpaseo/cli
@@ -301,7 +301,7 @@ version_at_least() {
   [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | sed -n 1p)" = "$2" ]
 }
 
-# True when the AXI tool $1 reports at least version $2;
+# True when tool $1 reports at least version $2;
 # a version that cannot be read is below the floor.
 axi_tool_current() {
   local have
