@@ -30,7 +30,8 @@
 # - the AXI tools Firstmate uses: gh-axi, chrome-devtools-axi, lavish-axi,
 #   tasks-axi, and quota-axi, also npm globals but installed at @latest when
 #   missing or below the version floors in AXI_TOOLS (never downgraded or
-#   pinned). For the Paseo CLI's refresh policy, see README.md's "Upstream
+#   pinned), and backpass with the acpx it needs, installed the same way
+#   (BACKPASS_TOOLS). For the Paseo CLI's refresh policy, see README.md's "Upstream
 #   CLI tools" section. Then `setup hooks`
 #   for gh-axi, chrome-devtools-axi, and lavish-axi, which writes SessionStart
 #   hooks for Claude Code, Codex, OpenCode (and, for lavish-axi, the Copilot
@@ -93,6 +94,10 @@ SKILLS_DIR=$HOME/.agents/skills
 # tool:minimum version.
 AXI_TOOLS=(gh-axi:0.1.29 chrome-devtools-axi:0.1.23 lavish-axi:0.1.80 tasks-axi:0.2.6 quota-axi:0.1.51)
 AXI_HOOK_TOOLS=(gh-axi chrome-devtools-axi lavish-axi)
+# backpass (agent memory review) and the acpx it drives, tool:minimum version.
+# backpass needs Node.js 22.5 or newer and acpx 22.13 or newer; both profiles
+# provide Node.js 24 LTS.
+BACKPASS_TOOLS=(backpass:0.1.41 acpx:0.21.1)
 # The Paseo CLI package and the oldest version the worker orchestration accepts.
 PASEO_PACKAGE=@getpaseo/cli
 PASEO_MIN=0.8.0
@@ -304,11 +309,11 @@ axi_tool_current() {
   version_at_least "$have" "$2"
 }
 
-# Firstmate's AXI tools, npm globals installed at @latest when missing or below
-# their floor, then checked against it.
-ensure_axi_tools() {
+# Installs the npm globals named by the tool:minimum entries "$@" at @latest
+# when missing or below their floor, then checks them against it.
+ensure_npm_tools_at_floor() {
   local entry tool min names=()
-  for entry in "${AXI_TOOLS[@]}"; do
+  for entry in "$@"; do
     tool=${entry%%:*}
     min=${entry#*:}
     axi_tool_current "$tool" "$min" || names+=("$tool@latest")
@@ -316,12 +321,24 @@ ensure_axi_tools() {
   [ "${#names[@]}" -gt 0 ] || return 0
   say "npm install -g ${names[*]}"
   npm install -g "${names[@]}" >/dev/null || oops "npm install -g ${names[*]} failed (offline?)" || return 1
-  for entry in "${AXI_TOOLS[@]}"; do
+  for entry in "$@"; do
     tool=${entry%%:*}
     min=${entry#*:}
     axi_tool_current "$tool" "$min" \
       || oops "$tool is still missing or below $min after npm install -g (is npm's global bin on PATH?)" || return 1
   done
+}
+
+# Firstmate's AXI tools, npm globals installed at @latest when missing or below
+# their floor, then checked against it.
+ensure_axi_tools() {
+  ensure_npm_tools_at_floor "${AXI_TOOLS[@]}"
+}
+
+# backpass and acpx, installed the same way. Only the CLIs: nothing runs
+# `backpass init` or configures a repository, the user scope, or SSH hosts.
+ensure_backpass_tools() {
+  ensure_npm_tools_at_floor "${BACKPASS_TOOLS[@]}"
 }
 
 # See README.md's "Upstream CLI tools" for Paseo's refresh policy.
@@ -570,6 +587,7 @@ main() {
   step ensure_npm_globals
   step ensure_cf_tools_local
   step ensure_axi_tools
+  step ensure_backpass_tools
   step ensure_paseo
   step ensure_axi_hooks
   smoke_checks

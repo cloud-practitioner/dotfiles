@@ -217,6 +217,10 @@ A Nix copy would hide the image's `gh` on `PATH`. The PR evidence gate needs `gh
 Both Linux profiles install ImageMagick (`magick`, `convert`). The gate uses ImageMagick to make its images.
 Run `gh auth login` once on each machine. The AXI tools use the credentials from `gh`. This configuration does not store a token.
 
+**backpass and acpx** (`tools/node-tools.sh`) are two more npm globals, installed exactly like the AXI tools: at `@latest` into npm's global prefix when missing or below a floor, never downgraded or pinned (`BACKPASS_TOOLS` owns the floors).
+[backpass](https://github.com/kunchenguid/backpass) reads local agent session transcripts and proposes evidence-backed edits to `AGENTS.md`, `CLAUDE.md`, and skills. It needs Node.js 22.5 or newer and `acpx` on `PATH` (`acpx` needs 22.13 or newer); both profiles provide Node.js 24 LTS. Its `backpass apply` review UI uses `lavish-axi`, which is one of the AXI tools above.
+This provisions the CLIs only: nothing runs `backpass init`, `backpass`, or `backpass apply`, and no `.backpassrc.json` or SSH discovery host is configured.
+
 **The Paseo CLI** (`paseo`, from the npm package `@getpaseo/cli`) is also an npm global in `tools/node-tools.sh`, and it is never pinned.
 The worker orchestration's Paseo runtime backend needs it, at 0.8 or newer, together with `jq` (a Nix package in both profiles) and `treehouse` (above).
 Unlike the tools above, every switch follows upstream: it asks the npm registry for the latest version and installs `@getpaseo/cli@latest` when that differs from the installed `paseo`.
